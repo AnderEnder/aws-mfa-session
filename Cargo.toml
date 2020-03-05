@@ -1,0 +1,12 @@
+[package]
+name = "aws-mfa-session"
+version = "0.1.0"
+authors = ["Andrii Radyk <ander.ender@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+structopt = "0.3"
+rusoto_iam = "0.42"
+rusoto_core = "0.42"
+rusoto_sts = "0.42"
+shellexpand = "2"
