@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  release-crates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: publish package to crates
+        run: |
+          cargo package
+          cargo publish --token ${{ secrets.CARGO_TOKEN }} || true
+
+  release-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: static build release
+        run: |
+          docker run --rm -t \
+            -v "$(pwd)":/volume \
+            clux/muslrust cargo build --release
+      - name: archive
+        run: |
+          sudo strip target/x86_64-unknown-linux-musl/release/aws-mfa-session
+          sudo tar -C target/x86_64-unknown-linux-musl/release -czf  $(pwd)/aws-mfa-session-linux.tar.gz aws-mfa-session
+      - name: publish release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: aws-mfa-session-x86_64-linux.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-osx:
+    runs-on: macOS-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - name: build release
+        run: cargo build --release --verbose
+      - name: archive
+        run: tar -C target/release -czf $(pwd)/aws-mfa-session-x86_64-osx.tar.gz aws-mfa-session
+      - name: publish release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: aws-mfa-session-x86_64-osx.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: build release
+        run: cargo build --release --verbose
+      - name: archive
+        run: tar -C target/release -czf $(pwd)/aws-mfa-session-x86_64-windows.tar.gz aws-mfa-session.exe
+        shell: bash
+      - name: publish release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: aws-mfa-session-x86_64-windows.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
