@@ -6,7 +6,19 @@ edition = "2018"
 
 [dependencies]
 structopt = "0.3"
-rusoto_iam = "0.42"
-rusoto_core = "0.42"
-rusoto_sts = "0.42"
 shellexpand = "2"
+
+[dependencies.rusoto_core]
+version = "0.42"
+default-features = false
+features = [ "rustls" ]
+
+[dependencies.rusoto_iam]
+version = "0.42"
+default-features = false
+features = [ "rustls" ]
+
+[dependencies.rusoto_sts]
+version = "0.42"
+default-features = false
+features = [ "rustls" ]
