@@ -13,7 +13,7 @@ use structopt::StructOpt;
     name = "aws-mfa-session",
         global_settings(&[AppSettings::ColoredHelp, AppSettings::NeedsLongHelp, AppSettings::NeedsSubcommandHelp]),
 )]
-struct Opts {
+pub struct Args {
     /// aws credential profile
     #[structopt(long = "profile", short = "p", default_value = "default")]
     profile: String,
@@ -28,9 +28,7 @@ struct Opts {
     shell: bool,
 }
 
-fn main() -> Result<(), failure::Error> {
-    let opts = Opts::from_args();
-
+pub fn run(opts: Args) -> Result<(), failure::Error> {
     let iam_client = IamClient::new(Default::default());
 
     let serial_number = match opts.arn {

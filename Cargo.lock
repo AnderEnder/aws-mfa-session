@@ -54,18 +54,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8aac770f1885fd7e387acedd76065302551364496e46b3dd00860b2f8359b9d"
 
 [[package]]
-name = "aws-mfa-session"
-version = "0.1.0"
-dependencies = [
- "failure",
- "rusoto_core",
- "rusoto_iam",
- "rusoto_sts",
- "shellexpand",
- "structopt",
-]
-
-[[package]]
 name = "backtrace"
 version = "0.3.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -691,6 +679,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75189eb85871ea5c2e2c15abbdd541185f63b408415e5051f5cac122d8c774b9"
 dependencies = [
  "rustc_version",
+]
+
+[[package]]
+name = "mfa-session"
+version = "0.1.0"
+dependencies = [
+ "failure",
+ "rusoto_core",
+ "rusoto_iam",
+ "rusoto_sts",
+ "shellexpand",
+ "structopt",
 ]
 
 [[package]]
