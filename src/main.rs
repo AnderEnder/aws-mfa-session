@@ -28,7 +28,7 @@ struct Opts {
     shell: bool,
 }
 
-fn main() {
+fn main() -> Result<(), failure::Error> {
     let opts = Opts::from_args();
 
     let iam_client = IamClient::new(Default::default());
@@ -59,25 +59,21 @@ fn main() {
 
     let credentials = sts_client
         .get_session_token(sts_request)
-        .sync()
-        .unwrap()
+        .sync()?
         .credentials
         .unwrap();
 
     let identity = sts_client
         .get_caller_identity(GetCallerIdentityRequest {})
-        .sync()
-        .unwrap();
+        .sync()?;
 
     let user = iam_client
         .get_user(GetUserRequest { user_name: None })
-        .sync()
-        .unwrap()
+        .sync()?
         .user;
 
     let ps = format!("AWS:{}@{} \\$ ", user.user_name, identity.account.unwrap());
-
-    let shell = std::env::var("SHELL").unwrap();
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned());
 
     if opts.shell {
         let envs: HashMap<&str, String> = [
@@ -90,11 +86,13 @@ fn main() {
         .cloned()
         .collect();
 
-        Command::new(shell).envs(envs).status().unwrap();
+        Command::new(shell).envs(envs).status()?;
     } else {
         println!("export AWS_ACCESS_KEY={}", credentials.access_key_id);
         println!("export AWS_SECRET_KEY={}", credentials.secret_access_key);
         println!("export AWS_SESSION_TOKEN={}", credentials.session_token);
         println!("export PS1='{}'", ps);
     }
+
+    Ok(())
 }
