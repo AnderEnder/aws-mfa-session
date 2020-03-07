@@ -28,6 +28,25 @@ pub struct Args {
     shell: bool,
 }
 
+#[derive(Debug, Clone)]
+enum CliError {
+    NoMFA,
+    NoCredentials,
+    NoAccount,
+}
+
+impl std::fmt::Display for CliError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            CliError::NoMFA => write!(f, "No MFA device in user profile"),
+            CliError::NoCredentials => write!(f, "No returned credentials"),
+            CliError::NoAccount => write!(f, "No returned account"),
+        }
+    }
+}
+
+impl std::error::Error for CliError {}
+
 pub fn run(opts: Args) -> Result<(), failure::Error> {
     let iam_client = IamClient::new(Default::default());
 
@@ -39,9 +58,9 @@ pub fn run(opts: Args) -> Result<(), failure::Error> {
                 max_items: Some(1),
                 user_name: None,
             };
-            let response = iam_client.list_mfa_devices(mfa_request).sync().unwrap();
+            let response = iam_client.list_mfa_devices(mfa_request).sync()?;
             let ListMFADevicesResponse { mfa_devices, .. } = response;
-            let serial = &mfa_devices.get(0).unwrap().serial_number;
+            let serial = &mfa_devices.get(0).ok_or(CliError::NoMFA)?.serial_number;
             Some(serial.to_owned())
         }
         other => other,
@@ -59,7 +78,7 @@ pub fn run(opts: Args) -> Result<(), failure::Error> {
         .get_session_token(sts_request)
         .sync()?
         .credentials
-        .unwrap();
+        .ok_or(CliError::NoCredentials)?;
 
     let identity = sts_client
         .get_caller_identity(GetCallerIdentityRequest {})
@@ -70,7 +89,8 @@ pub fn run(opts: Args) -> Result<(), failure::Error> {
         .sync()?
         .user;
 
-    let ps = format!("AWS:{}@{} \\$ ", user.user_name, identity.account.unwrap());
+    let account = identity.account.ok_or(CliError::NoAccount)?;
+    let ps = format!("AWS:{}@{} \\$ ", user.user_name, account);
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned());
 
     if opts.shell {
