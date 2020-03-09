@@ -8,6 +8,12 @@ use structopt::StructOpt;
 
 // const CONF_FILE_NAME: &str = "~/.aws/credentials";
 
+#[cfg(not(target_os = "windows"))]
+const DEFAULT_SHELL: &str = "/bin/sh";
+
+#[cfg(target_os = "windows")]
+const DEFAULT_SHELL: &str = "cmd.exe";
+
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(
     name = "aws-mfa-session",
@@ -91,7 +97,7 @@ pub fn run(opts: Args) -> Result<(), failure::Error> {
 
     let account = identity.account.ok_or(CliError::NoAccount)?;
     let ps = format!("AWS:{}@{} \\$ ", user.user_name, account);
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned());
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| DEFAULT_SHELL.to_owned());
 
     if opts.shell {
         let envs: HashMap<&str, String> = [
