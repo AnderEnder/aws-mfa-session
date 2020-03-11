@@ -1,3 +1,6 @@
+mod error;
+use error::CliError;
+
 use rusoto_iam::{GetUserRequest, Iam, IamClient, ListMFADevicesRequest, ListMFADevicesResponse};
 use rusoto_sts::{GetCallerIdentityRequest, GetSessionTokenRequest, Sts, StsClient};
 // use shellexpand::tilde;
@@ -34,26 +37,7 @@ pub struct Args {
     shell: bool,
 }
 
-#[derive(Debug, Clone)]
-enum CliError {
-    NoMFA,
-    NoCredentials,
-    NoAccount,
-}
-
-impl std::fmt::Display for CliError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            CliError::NoMFA => write!(f, "No MFA device in user profile"),
-            CliError::NoCredentials => write!(f, "No returned credentials"),
-            CliError::NoAccount => write!(f, "No returned account"),
-        }
-    }
-}
-
-impl std::error::Error for CliError {}
-
-pub fn run(opts: Args) -> Result<(), failure::Error> {
+pub fn run(opts: Args) -> Result<(), CliError> {
     let iam_client = IamClient::new(Default::default());
 
     let serial_number = match opts.arn {
