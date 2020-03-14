@@ -1,5 +1,8 @@
 mod error;
+mod shell;
+
 use error::CliError;
+use shell::Shell;
 
 use rusoto_iam::{GetUserRequest, Iam, IamClient, ListMFADevicesRequest, ListMFADevicesResponse};
 use rusoto_sts::{GetCallerIdentityRequest, GetSessionTokenRequest, Sts, StsClient};
@@ -96,10 +99,12 @@ pub fn run(opts: Args) -> Result<(), CliError> {
 
         Command::new(shell).envs(envs).status()?;
     } else {
-        println!("export AWS_ACCESS_KEY={}", credentials.access_key_id);
-        println!("export AWS_SECRET_KEY={}", credentials.secret_access_key);
-        println!("export AWS_SESSION_TOKEN={}", credentials.session_token);
-        println!("export PS1='{}'", ps);
+        Shell::from(shell.as_str()).export(
+            credentials.access_key_id,
+            credentials.secret_access_key,
+            credentials.session_token,
+            ps,
+        );
     }
 
     Ok(())
