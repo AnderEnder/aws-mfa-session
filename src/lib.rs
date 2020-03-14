@@ -7,6 +7,7 @@ use shell::Shell;
 use rusoto_iam::{GetUserRequest, Iam, IamClient, ListMFADevicesRequest, ListMFADevicesResponse};
 use rusoto_sts::{GetCallerIdentityRequest, GetSessionTokenRequest, Sts, StsClient};
 // use shellexpand::tilde;
+use futures::compat::Future01CompatExt;
 use std::collections::HashMap;
 use std::process::Command;
 use structopt::clap::AppSettings;
@@ -40,7 +41,7 @@ pub struct Args {
     shell: bool,
 }
 
-pub fn run(opts: Args) -> Result<(), CliError> {
+pub async fn run(opts: Args) -> Result<(), CliError> {
     let iam_client = IamClient::new(Default::default());
 
     let serial_number = match opts.arn {
@@ -51,7 +52,7 @@ pub fn run(opts: Args) -> Result<(), CliError> {
                 max_items: Some(1),
                 user_name: None,
             };
-            let response = iam_client.list_mfa_devices(mfa_request).sync()?;
+            let response = iam_client.list_mfa_devices(mfa_request).compat().await?;
             let ListMFADevicesResponse { mfa_devices, .. } = response;
             let serial = &mfa_devices.get(0).ok_or(CliError::NoMFA)?.serial_number;
             Some(serial.to_owned())
@@ -69,17 +70,20 @@ pub fn run(opts: Args) -> Result<(), CliError> {
 
     let credentials = sts_client
         .get_session_token(sts_request)
-        .sync()?
+        .compat()
+        .await?
         .credentials
         .ok_or(CliError::NoCredentials)?;
 
     let identity = sts_client
         .get_caller_identity(GetCallerIdentityRequest {})
-        .sync()?;
+        .compat()
+        .await?;
 
     let user = iam_client
         .get_user(GetUserRequest { user_name: None })
-        .sync()?
+        .compat()
+        .await?
         .user;
 
     let account = identity.account.ok_or(CliError::NoAccount)?;
