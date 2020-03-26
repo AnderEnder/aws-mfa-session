@@ -9,22 +9,20 @@ license = "MIT"
 structopt = "0.3"
 shellexpand = "2"
 failure = "0.1"
-futures = { version = "0.3", features = ["compat"] }
 tokio = { version = "0.2", features = ["full"] }
-tokio-compat = "0.1"
 
 [dependencies.rusoto_core]
-version = "0.42"
+version = "0.43"
 default-features = false
 features = [ "rustls" ]
 
 [dependencies.rusoto_iam]
-version = "0.42"
+version = "0.43"
 default-features = false
 features = [ "rustls" ]
 
 [dependencies.rusoto_sts]
-version = "0.42"
+version = "0.43"
 default-features = false
 features = [ "rustls" ]
 

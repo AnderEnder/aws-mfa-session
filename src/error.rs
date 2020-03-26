@@ -49,6 +49,7 @@ impl From<RusotoError<ListMFADevicesError>> for CliError {
             RusotoError::Validation(e) => Self::Rusoto(e),
             RusotoError::ParseError(e) => Self::Rusoto(e),
             RusotoError::Unknown(e) => Self::RusotoUnknown(e),
+            RusotoError::Blocking => Self::Rusoto("Blocking".to_owned()),
         }
     }
 }
@@ -62,6 +63,7 @@ impl From<RusotoError<GetSessionTokenError>> for CliError {
             RusotoError::Validation(e) => Self::Rusoto(e),
             RusotoError::ParseError(e) => Self::Rusoto(e),
             RusotoError::Unknown(e) => Self::RusotoUnknown(e),
+            RusotoError::Blocking => Self::Rusoto("Blocking".to_owned()),
         }
     }
 }
@@ -75,6 +77,7 @@ impl From<RusotoError<GetUserError>> for CliError {
             RusotoError::Validation(e) => Self::Rusoto(e),
             RusotoError::ParseError(e) => Self::Rusoto(e),
             RusotoError::Unknown(e) => Self::RusotoUnknown(e),
+            RusotoError::Blocking => Self::Rusoto("Blocking".to_owned()),
         }
     }
 }
@@ -88,6 +91,7 @@ impl From<RusotoError<GetCallerIdentityError>> for CliError {
             RusotoError::Validation(e) => Self::Rusoto(e),
             RusotoError::ParseError(e) => Self::Rusoto(e),
             RusotoError::Unknown(e) => Self::RusotoUnknown(e),
+            RusotoError::Blocking => Self::Rusoto("Blocking".to_owned()),
         }
     }
 }
