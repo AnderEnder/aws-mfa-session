@@ -8,8 +8,7 @@ use rusoto_iam::{GetUserRequest, Iam, IamClient, ListMFADevicesRequest, ListMFAD
 use rusoto_sts::{GetCallerIdentityRequest, GetSessionTokenRequest, Sts, StsClient};
 // use shellexpand::tilde;
 use rusoto_core::request::HttpClient;
-use rusoto_core::Client;
-use rusoto_core::Region;
+use rusoto_core::{Client, Region};
 use rusoto_credential::ProfileProvider;
 use std::collections::HashMap;
 use std::env;
@@ -48,16 +47,13 @@ pub struct Args {
 pub async fn run(opts: Args) -> Result<(), CliError> {
     // ProfileProvider is limited, but AWS_PROFILE is used elsewhere
     env::set_var("AWS_PROFILE", opts.profile);
-    let provider = ProfileProvider::new().unwrap();
+    let provider = ProfileProvider::new()?;
 
-    let dispatcher = HttpClient::new().unwrap();
+    let dispatcher = HttpClient::new()?;
     let client = Client::new_with(provider, dispatcher);
 
     // Read region configuration from profile using AWS_PROFILE
-    let region: Region = ProfileProvider::region()
-        .unwrap()
-        .map(|x| x.parse().unwrap())
-        .unwrap_or(Default::default());
+    let region: Region = Default::default();
 
     let iam_client = IamClient::new_with_client(client.clone(), region.clone());
 

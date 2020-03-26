@@ -1,5 +1,6 @@
-use rusoto_core::request::BufferedHttpResponse;
+use rusoto_core::request::{BufferedHttpResponse, TlsError};
 use rusoto_core::RusotoError;
+use rusoto_credential::CredentialsError;
 use rusoto_iam::{GetUserError, ListMFADevicesError};
 use rusoto_sts::{GetCallerIdentityError, GetSessionTokenError};
 
@@ -37,6 +38,18 @@ impl std::error::Error for CliError {}
 impl From<std::io::Error> for CliError {
     fn from(e: std::io::Error) -> Self {
         CliError::IoError(e)
+    }
+}
+
+impl From<CredentialsError> for CliError {
+    fn from(e: CredentialsError) -> Self {
+        CliError::Rusoto(e.message)
+    }
+}
+
+impl From<TlsError> for CliError {
+    fn from(e: TlsError) -> Self {
+        CliError::Rusoto(e.to_string())
     }
 }
 
