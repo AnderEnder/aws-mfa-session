@@ -7,7 +7,12 @@ use shell::Shell;
 use rusoto_iam::{GetUserRequest, Iam, IamClient, ListMFADevicesRequest, ListMFADevicesResponse};
 use rusoto_sts::{GetCallerIdentityRequest, GetSessionTokenRequest, Sts, StsClient};
 // use shellexpand::tilde;
+use rusoto_core::request::HttpClient;
+use rusoto_core::Client;
+use rusoto_core::Region;
+use rusoto_credential::ProfileProvider;
 use std::collections::HashMap;
+use std::env;
 use std::process::Command;
 use structopt::clap::AppSettings;
 use structopt::StructOpt;
@@ -41,7 +46,20 @@ pub struct Args {
 }
 
 pub async fn run(opts: Args) -> Result<(), CliError> {
-    let iam_client = IamClient::new(Default::default());
+    // ProfileProvider is limited, but AWS_PROFILE is used elsewhere
+    env::set_var("AWS_PROFILE", opts.profile);
+    let provider = ProfileProvider::new().unwrap();
+
+    let dispatcher = HttpClient::new().unwrap();
+    let client = Client::new_with(provider, dispatcher);
+
+    // Read region configuration from profile using AWS_PROFILE
+    let region: Region = ProfileProvider::region()
+        .unwrap()
+        .map(|x| x.parse().unwrap())
+        .unwrap_or(Default::default());
+
+    let iam_client = IamClient::new_with_client(client.clone(), region.clone());
 
     let serial_number = match opts.arn {
         None => {
@@ -60,7 +78,7 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
     };
 
     // get sts credentials
-    let sts_client = StsClient::new(Default::default());
+    let sts_client = StsClient::new_with_client(client, region);
     let sts_request = GetSessionTokenRequest {
         duration_seconds: None,
         serial_number,

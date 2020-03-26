@@ -10,6 +10,7 @@ structopt = "0.3"
 shellexpand = "2"
 failure = "0.1"
 tokio = { version = "0.2", features = ["full"] }
+rusoto_credential = "0.43"
 
 [dependencies.rusoto_core]
 version = "0.43"
