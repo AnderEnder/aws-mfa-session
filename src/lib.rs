@@ -2,23 +2,20 @@ mod credentials;
 mod error;
 mod shell;
 
-use credentials::Profile;
+use credentials::{update_credentials, Profile};
 use error::CliError;
 use shell::Shell;
 
-use rusoto_iam::{GetUserRequest, Iam, IamClient, ListMFADevicesRequest, ListMFADevicesResponse};
-use rusoto_sts::{GetCallerIdentityRequest, GetSessionTokenRequest, Sts, StsClient};
-// use shellexpand::tilde;
 use rusoto_core::request::HttpClient;
 use rusoto_core::{Client, Region};
 use rusoto_credential::ProfileProvider;
+use rusoto_iam::{GetUserRequest, Iam, IamClient, ListMFADevicesRequest, ListMFADevicesResponse};
+use rusoto_sts::{GetCallerIdentityRequest, GetSessionTokenRequest, Sts, StsClient};
 use std::collections::HashMap;
+use std::env;
 use std::process::Command;
-use std::{env, fs};
 use structopt::clap::AppSettings;
 use structopt::StructOpt;
-
-const CREDENTIAL_FILE: &str = "~/.aws/credentials";
 
 #[cfg(not(target_os = "windows"))]
 const DEFAULT_SHELL: &str = "/bin/sh";
@@ -115,10 +112,7 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
             session_token: Some(credentials2.session_token),
             region: Some(region.name().to_owned()),
         };
-
-        let config = fs::read_to_string(CREDENTIAL_FILE)?;
-        let updated_config = credentials::update_profile(&config, &profile);
-        fs::write(CREDENTIAL_FILE, updated_config)?;
+        update_credentials(&profile)?;
     }
 
     if opts.shell {

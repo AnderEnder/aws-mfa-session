@@ -1,4 +1,7 @@
+use dirs::home_dir;
 use regex::{escape, Regex};
+use std::path::PathBuf;
+use std::{fs, io};
 
 pub struct Profile {
     pub name: String,
@@ -53,6 +56,23 @@ pub fn update_profile(config: &str, profile: &Profile) -> String {
         // append
         format!("{}\n\n{}", config, profile.config_section())
     }
+}
+
+// https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html
+// Linux or macOS: ~/.aws/credentials
+// Windows: "%UserProfile%\.aws\credentials"
+fn credential_file() -> PathBuf {
+    let mut file = home_dir().unwrap();
+    file.push(".aws");
+    file.set_file_name("credentials");
+    file
+}
+
+pub fn update_credentials(profile: &Profile) -> io::Result<()> {
+    let file = credential_file();
+    let config = fs::read_to_string(&file)?;
+    let updated_config = update_profile(&config, profile);
+    fs::write(file, updated_config)
 }
 
 #[cfg(test)]
