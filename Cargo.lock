@@ -681,6 +681,7 @@ name = "mfa-session"
 version = "0.1.0"
 dependencies = [
  "failure",
+ "regex",
  "rusoto_core",
  "rusoto_credential",
  "rusoto_iam",
