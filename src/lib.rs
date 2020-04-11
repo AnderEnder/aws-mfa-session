@@ -41,6 +41,9 @@ pub struct Args {
     /// run shell with aws credentials as environment variables
     #[structopt(short = "s")]
     shell: bool,
+    /// print(export) aws credentials as environment variables
+    #[structopt(short = "e")]
+    export: bool,
     /// update aws credential profile
     #[structopt(long = "update-profile", short = "u")]
     update_profile: Option<String>,
@@ -102,32 +105,34 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
     let ps = format!("AWS:{}@{} \\$ ", user.user_name, account);
     let shell = std::env::var("SHELL").unwrap_or_else(|_| DEFAULT_SHELL.to_owned());
 
-    let credentials2 = credentials.clone();
-
     if let Some(name) = opts.update_profile {
+        let c = credentials.clone();
         let profile = Profile {
             name,
-            access_key_id: credentials2.access_key_id,
-            secret_access_key: credentials2.secret_access_key,
-            session_token: Some(credentials2.session_token),
+            access_key_id: c.access_key_id,
+            secret_access_key: c.secret_access_key,
+            session_token: Some(c.session_token),
             region: Some(region.name().to_owned()),
         };
         update_credentials(&profile)?;
     }
 
     if opts.shell {
+        let c = credentials.clone();
         let envs: HashMap<&str, String> = [
-            ("AWS_ACCESS_KEY", credentials.access_key_id),
-            ("AWS_SECRET_KEY", credentials.secret_access_key),
-            ("AWS_SESSION_TOKEN", credentials.session_token),
-            ("PS1", ps),
+            ("AWS_ACCESS_KEY", c.access_key_id),
+            ("AWS_SECRET_KEY", c.secret_access_key),
+            ("AWS_SESSION_TOKEN", c.session_token),
+            ("PS1", ps.clone()),
         ]
         .iter()
         .cloned()
         .collect();
 
-        Command::new(shell).envs(envs).status()?;
-    } else {
+        Command::new(shell.clone()).envs(envs).status()?;
+    }
+
+    if opts.export {
         Shell::from(shell.as_str()).export(
             credentials.access_key_id,
             credentials.secret_access_key,
