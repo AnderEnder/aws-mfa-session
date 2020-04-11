@@ -64,7 +64,7 @@ pub fn update_profile(config: &str, profile: &Profile) -> String {
 fn credential_file() -> PathBuf {
     let mut file = home_dir().unwrap();
     file.push(".aws");
-    file.set_file_name("credentials");
+    file.push("credentials");
     file
 }
 
