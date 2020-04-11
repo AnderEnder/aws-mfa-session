@@ -680,13 +680,13 @@ checksum = "3728d817d99e5ac407411fa471ff9800a778d88a24685968b36824eaf4bee400"
 name = "mfa-session"
 version = "0.1.0"
 dependencies = [
+ "dirs",
  "failure",
  "regex",
  "rusoto_core",
  "rusoto_credential",
  "rusoto_iam",
  "rusoto_sts",
- "shellexpand",
  "structopt",
  "tokio",
 ]
@@ -1301,15 +1301,6 @@ dependencies = [
  "digest",
  "fake-simd",
  "opaque-debug",
-]
-
-[[package]]
-name = "shellexpand"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a2b22262a9aaf9464d356f656fea420634f78c881c5eebd5ef5e66d8b9bc603"
-dependencies = [
- "dirs",
 ]
 
 [[package]]

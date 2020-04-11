@@ -2,22 +2,20 @@ mod credentials;
 mod error;
 mod shell;
 
+use credentials::{update_credentials, Profile};
 use error::CliError;
 use shell::Shell;
 
-use rusoto_iam::{GetUserRequest, Iam, IamClient, ListMFADevicesRequest, ListMFADevicesResponse};
-use rusoto_sts::{GetCallerIdentityRequest, GetSessionTokenRequest, Sts, StsClient};
-// use shellexpand::tilde;
 use rusoto_core::request::HttpClient;
 use rusoto_core::{Client, Region};
 use rusoto_credential::ProfileProvider;
+use rusoto_iam::{GetUserRequest, Iam, IamClient, ListMFADevicesRequest, ListMFADevicesResponse};
+use rusoto_sts::{GetCallerIdentityRequest, GetSessionTokenRequest, Sts, StsClient};
 use std::collections::HashMap;
 use std::env;
 use std::process::Command;
 use structopt::clap::AppSettings;
 use structopt::StructOpt;
-
-// const CONF_FILE_NAME: &str = "~/.aws/credentials";
 
 #[cfg(not(target_os = "windows"))]
 const DEFAULT_SHELL: &str = "/bin/sh";
@@ -43,6 +41,9 @@ pub struct Args {
     /// run shell with aws credentials as environment variables
     #[structopt(short = "s")]
     shell: bool,
+    /// update aws credential profile
+    #[structopt(long = "update-profile", short = "u")]
+    update_profile: Option<String>,
 }
 
 pub async fn run(opts: Args) -> Result<(), CliError> {
@@ -75,7 +76,7 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
     };
 
     // get sts credentials
-    let sts_client = StsClient::new_with_client(client, region);
+    let sts_client = StsClient::new_with_client(client, region.clone());
     let sts_request = GetSessionTokenRequest {
         duration_seconds: None,
         serial_number,
@@ -100,6 +101,19 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
     let account = identity.account.ok_or(CliError::NoAccount)?;
     let ps = format!("AWS:{}@{} \\$ ", user.user_name, account);
     let shell = std::env::var("SHELL").unwrap_or_else(|_| DEFAULT_SHELL.to_owned());
+
+    let credentials2 = credentials.clone();
+
+    if let Some(name) = opts.update_profile {
+        let profile = Profile {
+            name,
+            access_key_id: credentials2.access_key_id,
+            secret_access_key: credentials2.secret_access_key,
+            session_token: Some(credentials2.session_token),
+            region: Some(region.name().to_owned()),
+        };
+        update_credentials(&profile)?;
+    }
 
     if opts.shell {
         let envs: HashMap<&str, String> = [

@@ -11,34 +11,31 @@ impl Shell {
     pub fn export(self, id: String, secret: String, token: String, ps: String) {
         match self {
             Shell::Bash | Shell::Sh | Shell::Zsh => {
-                println!("export {}={}", "AWS_ACCESS_KEY", id);
-                println!("export {}={}", "AWS_SECRET_KEY", secret);
-                println!("export {}={}", "AWS_SESSION_TOKEN", token);
-                println!("export {}='{}'", "PS1", ps);
+                println!("export AWS_ACCESS_KEY={}", id);
+                println!("export AWS_SECRET_KEY={}", secret);
+                println!("export AWS_SESSION_TOKEN={}", token);
+                println!("export PS1='{}'", ps);
             }
             Shell::Fish => {
-                println!("set -x {} \"{}\"", "AWS_ACCESS_KEY", id);
-                println!("set -x {} \"{}\"", "AWS_SECRET_KEY", secret);
-                println!("set -x {} \"{}\"", "AWS_SESSION_TOKEN", token);
-                println!("set -x {} \"{}\"", "PS1", ps);
+                println!("set -x AWS_ACCESS_KEY \"{}\"", id);
+                println!("set -x AWS_SECRET_KEY \"{}\"", secret);
+                println!("set -x AWS_SESSION_TOKEN \"{}\"", token);
+                println!("set -x PS1 \"{}\"", ps);
             }
             Shell::Cmd => {
-                println!("set {}={}", "AWS_ACCESS_KEY", id);
-                println!("set {}={}", "AWS_SECRET_KEY", secret);
-                println!("set {}={}", "AWS_SESSION_TOKEN", token);
+                println!("set AWS_ACCESS_KEY={}", id);
+                println!("set AWS_SECRET_KEY={}", secret);
+                println!("set AWS_SESSION_TOKEN={}", token);
             }
             Shell::PowerShell => {
+                println!("Set-Variable -Name \"AWS_ACCESS_KEY\" -Value \"{}\"", id);
                 println!(
-                    "Set-Variable -Name \"{}\" -Value \"{}\"",
-                    "AWS_ACCESS_KEY", id
+                    "Set-Variable -Name \"AWS_SECRET_KEY\" -Value \"{}\"",
+                    secret
                 );
                 println!(
-                    "Set-Variable -Name \"{}\" -Value \"{}\"",
-                    "AWS_SECRET_KEY", secret
-                );
-                println!(
-                    "Set-Variable -Name \"{}\" -Value \"{}\"",
-                    "AWS_SESSION_TOKEN", token
+                    "Set-Variable -Name \"AWS_SESSION_TOKEN\" -Value \"{}\"",
+                    token
                 );
             }
         }
