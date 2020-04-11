@@ -256,4 +256,86 @@ aws_secret_access_key = SEC123RET/NEW
 "##
         );
     }
+
+    #[test]
+    fn test_update_profile_replace_inside_double() {
+        let profile = Profile {
+            name: String::from("session-production"),
+            access_key_id: String::from("AACCCCEESSSSKKEEYY/NEW"),
+            secret_access_key: String::from("SEC123RET/NEW"),
+            session_token: None,
+            region: None,
+        };
+
+        let original = r##"[default]
+aws_access_key_id = AACCCCEESSSSKKEEYY/DEFAULT
+aws_secret_access_key = SEC123RET/DEFAULT
+
+[session-production]
+aws_access_key_id = AACCCCEESSSSKKEEYY/OLD
+aws_secret_access_key = SEC123RET/OLD
+
+[production]
+aws_access_key_id = AACCCCEESSSSKKEEYY/PROD
+aws_secret_access_key = SEC123RET/PROD"##;
+
+        let updated_first = update_profile(original, &profile);
+        let updated = update_profile(&updated_first, &profile);
+        assert_eq!(
+            updated,
+            r##"[default]
+aws_access_key_id = AACCCCEESSSSKKEEYY/DEFAULT
+aws_secret_access_key = SEC123RET/DEFAULT
+
+[session-production]
+aws_access_key_id = AACCCCEESSSSKKEEYY/NEW
+aws_secret_access_key = SEC123RET/NEW
+
+[production]
+aws_access_key_id = AACCCCEESSSSKKEEYY/PROD
+aws_secret_access_key = SEC123RET/PROD"##
+        );
+    }
+
+    #[test]
+    fn test_update_profile_replace_last_double() {
+        let profile = Profile {
+            name: String::from("session-production"),
+            access_key_id: String::from("AACCCCEESSSSKKEEYY/NEW"),
+            secret_access_key: String::from("SEC123RET/NEW"),
+            session_token: None,
+            region: None,
+        };
+
+        let original = r##"[default]
+aws_access_key_id = AACCCCEESSSSKKEEYY/DEFAULT
+aws_secret_access_key = SEC123RET/DEFAULT
+
+[production]
+aws_access_key_id = AACCCCEESSSSKKEEYY/PROD
+aws_secret_access_key = SEC123RET/PROD
+
+[session-production]
+aws_access_key_id = AACCCCEESSSSKKEEYY/OLD
+aws_secret_access_key = SEC123RET/OLD"##;
+
+        let updated_first = update_profile(original, &profile);
+        let updated = update_profile(&updated_first, &profile);
+        assert_eq!(
+            updated,
+            r##"[default]
+aws_access_key_id = AACCCCEESSSSKKEEYY/DEFAULT
+aws_secret_access_key = SEC123RET/DEFAULT
+
+[production]
+aws_access_key_id = AACCCCEESSSSKKEEYY/PROD
+aws_secret_access_key = SEC123RET/PROD
+
+[session-production]
+aws_access_key_id = AACCCCEESSSSKKEEYY/NEW
+aws_secret_access_key = SEC123RET/NEW
+
+"##
+        );
+    }
 }
