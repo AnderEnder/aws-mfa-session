@@ -35,6 +35,9 @@ pub struct Args {
     /// aws credentials file location to use. AWS_SHARED_CREDENTIALS_FILE is used if not defined
     #[structopt(long = "credentials-file", short = "f")]
     credentials_file: Option<String>,
+    /// aws region. AWS_REGION is used if not defined
+    #[structopt(long = "region", short = "r")]
+    region: Option<Region>,
     /// mfa code from mfa resource
     #[structopt(long = "code", short = "c")]
     code: String,
@@ -64,8 +67,12 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
     let dispatcher = HttpClient::new()?;
     let client = Client::new_with(provider, dispatcher);
 
-    // Read region configuration from profile using AWS_PROFILE
-    let region: Region = Default::default();
+    let region: Region = opts
+        .region
+        .unwrap_or_else(|| match std::env::var("AWS_REGION") {
+            Ok(s) => s.parse::<Region>().unwrap(),
+            _ => Default::default(),
+        });
 
     let iam_client = IamClient::new_with_client(client.clone(), region.clone());
 
