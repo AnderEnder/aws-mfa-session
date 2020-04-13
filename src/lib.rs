@@ -23,6 +23,9 @@ const DEFAULT_SHELL: &str = "/bin/sh";
 #[cfg(target_os = "windows")]
 const DEFAULT_SHELL: &str = "cmd.exe";
 
+const AWS_PROFILE: &str = "AWS_PROFILE";
+const AWS_DEFAULT_REGION: &str = "AWS_DEFAULT_REGION";
+
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(
     name = "aws-mfa-session",
@@ -58,7 +61,7 @@ pub struct Args {
 pub async fn run(opts: Args) -> Result<(), CliError> {
     // ProfileProvider is limited, but AWS_PROFILE is used elsewhere
     if let Some(profile) = opts.profile {
-        env::set_var("AWS_PROFILE", profile);
+        env::set_var(AWS_PROFILE, profile);
     }
 
     if let Some(file) = opts.credentials_file {
@@ -71,7 +74,7 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
 
     let region: Region = match opts.region {
         Some(region) => region,
-        None => match std::env::var("AWS_REGION") {
+        None => match std::env::var(AWS_DEFAULT_REGION) {
             Ok(s) => s.parse::<Region>()?,
             _ => Default::default(),
         },
