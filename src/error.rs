@@ -2,6 +2,7 @@ use rusoto_core::request::{BufferedHttpResponse, TlsError};
 use rusoto_core::RusotoError;
 use rusoto_credential::CredentialsError;
 use rusoto_iam::{GetUserError, ListMFADevicesError};
+use rusoto_signature::region::ParseRegionError;
 use rusoto_sts::{GetCallerIdentityError, GetSessionTokenError};
 
 #[derive(Debug)]
@@ -106,5 +107,10 @@ impl From<RusotoError<GetCallerIdentityError>> for CliError {
             RusotoError::Unknown(e) => Self::RusotoUnknown(e),
             RusotoError::Blocking => Self::Rusoto("Blocking".to_owned()),
         }
+    }
+}
+impl From<ParseRegionError> for CliError {
+    fn from(e: ParseRegionError) -> Self {
+        Self::Rusoto(e.to_string())
     }
 }

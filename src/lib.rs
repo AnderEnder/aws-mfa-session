@@ -2,7 +2,7 @@ mod credentials;
 mod error;
 mod shell;
 
-use credentials::{update_credentials, Profile};
+use credentials::*;
 use error::CliError;
 use shell::Shell;
 
@@ -23,15 +23,24 @@ const DEFAULT_SHELL: &str = "/bin/sh";
 #[cfg(target_os = "windows")]
 const DEFAULT_SHELL: &str = "cmd.exe";
 
+const AWS_PROFILE: &str = "AWS_PROFILE";
+const AWS_DEFAULT_REGION: &str = "AWS_DEFAULT_REGION";
+
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(
     name = "aws-mfa-session",
         global_settings(&[AppSettings::ColoredHelp, AppSettings::NeedsLongHelp, AppSettings::NeedsSubcommandHelp]),
 )]
 pub struct Args {
-    /// aws credential profile to use
-    #[structopt(long = "profile", short = "p", default_value = "default")]
-    profile: String,
+    /// aws credential profile to use. AWS_PROFILE is used by default
+    #[structopt(long = "profile", short = "p")]
+    profile: Option<String>,
+    /// aws credentials file location to use. AWS_SHARED_CREDENTIALS_FILE is used if not defined
+    #[structopt(long = "credentials-file", short = "f")]
+    credentials_file: Option<String>,
+    /// aws region. AWS_REGION is used if not defined
+    #[structopt(long = "region", short = "r")]
+    region: Option<Region>,
     /// mfa code from mfa resource
     #[structopt(long = "code", short = "c")]
     code: String,
@@ -51,14 +60,25 @@ pub struct Args {
 
 pub async fn run(opts: Args) -> Result<(), CliError> {
     // ProfileProvider is limited, but AWS_PROFILE is used elsewhere
-    env::set_var("AWS_PROFILE", opts.profile);
-    let provider = ProfileProvider::new()?;
+    if let Some(profile) = opts.profile {
+        env::set_var(AWS_PROFILE, profile);
+    }
 
+    if let Some(file) = opts.credentials_file {
+        env::set_var(AWS_SHARED_CREDENTIALS_FILE, file);
+    }
+
+    let provider = ProfileProvider::new()?;
     let dispatcher = HttpClient::new()?;
     let client = Client::new_with(provider, dispatcher);
 
-    // Read region configuration from profile using AWS_PROFILE
-    let region: Region = Default::default();
+    let region: Region = match opts.region {
+        Some(region) => region,
+        None => match std::env::var(AWS_DEFAULT_REGION) {
+            Ok(s) => s.parse::<Region>()?,
+            _ => Default::default(),
+        },
+    };
 
     let iam_client = IamClient::new_with_client(client.clone(), region.clone());
 
