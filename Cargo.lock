@@ -686,6 +686,7 @@ dependencies = [
  "rusoto_core",
  "rusoto_credential",
  "rusoto_iam",
+ "rusoto_signature",
  "rusoto_sts",
  "structopt",
  "tokio",

@@ -69,12 +69,13 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
     let dispatcher = HttpClient::new()?;
     let client = Client::new_with(provider, dispatcher);
 
-    let region: Region = opts
-        .region
-        .unwrap_or_else(|| match std::env::var("AWS_REGION") {
-            Ok(s) => s.parse::<Region>().unwrap(),
+    let region: Region = match opts.region {
+        Some(region) => region,
+        None => match std::env::var("AWS_REGION") {
+            Ok(s) => s.parse::<Region>()?,
             _ => Default::default(),
-        });
+        },
+    };
 
     let iam_client = IamClient::new_with_client(client.clone(), region.clone());
 
