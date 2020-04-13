@@ -58,18 +58,29 @@ pub fn update_profile(config: &str, profile: &Profile) -> String {
     }
 }
 
+pub const AWS_SHARED_CREDENTIALS_FILE: &str = "AWS_SHARED_CREDENTIALS_FILE";
+
+// Get credentials file from environment variable or use system default
 // https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html
 // Linux or macOS: ~/.aws/credentials
 // Windows: "%UserProfile%\.aws\credentials"
-fn credential_file() -> PathBuf {
-    let mut file = home_dir().unwrap();
-    file.push(".aws");
-    file.push("credentials");
-    file
+fn credential_file() -> io::Result<PathBuf> {
+    let file = match std::env::var(AWS_SHARED_CREDENTIALS_FILE) {
+        Ok(s) => PathBuf::from(s),
+        _ => {
+            let mut file = home_dir().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::Other, "Cannot find home directory")
+            })?;
+            file.push(".aws");
+            file.push("credentials");
+            file
+        }
+    };
+    Ok(file)
 }
 
 pub fn update_credentials(profile: &Profile) -> io::Result<()> {
-    let file = credential_file();
+    let file = credential_file()?;
     let config = fs::read_to_string(&file)?;
     let updated_config = update_profile(&config, profile);
     fs::write(file, updated_config)

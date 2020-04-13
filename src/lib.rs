@@ -2,7 +2,7 @@ mod credentials;
 mod error;
 mod shell;
 
-use credentials::{update_credentials, Profile};
+use credentials::*;
 use error::CliError;
 use shell::Shell;
 
@@ -32,6 +32,9 @@ pub struct Args {
     /// aws credential profile to use
     #[structopt(long = "profile", short = "p", default_value = "default")]
     profile: String,
+    /// aws credentials file location to use. AWS_SHARED_CREDENTIALS_FILE is used if not defined
+    #[structopt(long = "credentials-file", short = "f")]
+    credentials_file: Option<String>,
     /// mfa code from mfa resource
     #[structopt(long = "code", short = "c")]
     code: String,
@@ -52,8 +55,12 @@ pub struct Args {
 pub async fn run(opts: Args) -> Result<(), CliError> {
     // ProfileProvider is limited, but AWS_PROFILE is used elsewhere
     env::set_var("AWS_PROFILE", opts.profile);
-    let provider = ProfileProvider::new()?;
 
+    if let Some(file) = opts.credentials_file {
+        env::set_var(AWS_SHARED_CREDENTIALS_FILE, file);
+    }
+
+    let provider = ProfileProvider::new()?;
     let dispatcher = HttpClient::new()?;
     let client = Client::new_with(provider, dispatcher);
 
