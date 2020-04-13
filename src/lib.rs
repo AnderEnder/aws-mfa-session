@@ -29,9 +29,9 @@ const DEFAULT_SHELL: &str = "cmd.exe";
         global_settings(&[AppSettings::ColoredHelp, AppSettings::NeedsLongHelp, AppSettings::NeedsSubcommandHelp]),
 )]
 pub struct Args {
-    /// aws credential profile to use
-    #[structopt(long = "profile", short = "p", default_value = "default")]
-    profile: String,
+    /// aws credential profile to use. AWS_PROFILE is used by default
+    #[structopt(long = "profile", short = "p")]
+    profile: Option<String>,
     /// aws credentials file location to use. AWS_SHARED_CREDENTIALS_FILE is used if not defined
     #[structopt(long = "credentials-file", short = "f")]
     credentials_file: Option<String>,
@@ -57,7 +57,9 @@ pub struct Args {
 
 pub async fn run(opts: Args) -> Result<(), CliError> {
     // ProfileProvider is limited, but AWS_PROFILE is used elsewhere
-    env::set_var("AWS_PROFILE", opts.profile);
+    if let Some(profile) = opts.profile {
+        env::set_var("AWS_PROFILE", profile);
+    }
 
     if let Some(file) = opts.credentials_file {
         env::set_var(AWS_SHARED_CREDENTIALS_FILE, file);
