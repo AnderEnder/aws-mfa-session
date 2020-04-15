@@ -32,30 +32,30 @@ const AWS_DEFAULT_REGION: &str = "AWS_DEFAULT_REGION";
         global_settings(&[AppSettings::ColoredHelp, AppSettings::NeedsLongHelp, AppSettings::NeedsSubcommandHelp]),
 )]
 pub struct Args {
-    /// aws credential profile to use. AWS_PROFILE is used by default
+    /// AWS credential profile to use. AWS_PROFILE is used by default
     #[structopt(long = "profile", short = "p")]
     profile: Option<String>,
-    /// aws credentials file location to use. AWS_SHARED_CREDENTIALS_FILE is used if not defined
+    /// AWS credentials file location to use. AWS_SHARED_CREDENTIALS_FILE is used if not defined
     #[structopt(long = "credentials-file", short = "f")]
-    credentials_file: Option<String>,
-    /// aws region. AWS_REGION is used if not defined
+    file: Option<String>,
+    /// AWS region. AWS_REGION is used if not defined
     #[structopt(long = "region", short = "r")]
     region: Option<Region>,
-    /// mfa code from mfa resource
+    /// MFA code from MFA resource
     #[structopt(long = "code", short = "c")]
     code: String,
-    /// mfa device arn from user credentials
+    /// MFA device ARN from user profile. It could be detected automatically
     #[structopt(long = "arn", short = "a")]
     arn: Option<String>,
-    /// run shell with aws credentials as environment variables
+    /// Run shell with AWS credentials as environment variables
     #[structopt(short = "s")]
     shell: bool,
-    /// print(export) aws credentials as environment variables
+    /// Print(export) AWS credentials as environment variables
     #[structopt(short = "e")]
     export: bool,
-    /// update aws credential profile
+    /// Update AWS credential profile with temporary session credentials
     #[structopt(long = "update-profile", short = "u")]
-    update_profile: Option<String>,
+    session_profile: Option<String>,
 }
 
 pub async fn run(opts: Args) -> Result<(), CliError> {
@@ -64,7 +64,7 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
         env::set_var(AWS_PROFILE, profile);
     }
 
-    if let Some(file) = opts.credentials_file {
+    if let Some(file) = opts.file {
         env::set_var(AWS_SHARED_CREDENTIALS_FILE, file);
     }
 
@@ -125,7 +125,7 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
     let ps = format!("AWS:{}@{} \\$ ", user.user_name, account);
     let shell = std::env::var("SHELL").unwrap_or_else(|_| DEFAULT_SHELL.to_owned());
 
-    if let Some(name) = opts.update_profile {
+    if let Some(name) = opts.session_profile {
         let c = credentials.clone();
         let profile = Profile {
             name,

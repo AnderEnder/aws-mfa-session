@@ -1,5 +1,5 @@
 [package]
-name = "mfa-session"
+name = "aws-mfa-session"
 version = "0.2.0"
 authors = ["Andrii Radyk <ander.ender@gmail.com>"]
 edition = "2018"

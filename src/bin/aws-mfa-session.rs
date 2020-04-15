@@ -1,4 +1,4 @@
-use mfa_session::{run, Args};
+use aws_mfa_session::{run, Args};
 use std::process::exit;
 use structopt::StructOpt;
 
