@@ -2,6 +2,23 @@
 name = "aws-mfa-session"
 version = "0.2.0"
 authors = ["Andrii Radyk <ander.ender@gmail.com>"]
+description = """
+A command line utility to generate temporary AWS credentials with virtual MFA device. Credentials could be exported into new shell or inserted into aws credentials file.
+"""
+documentation = "https://github.com/AnderEnder/aws-mfa-session"
+homepage = "https://github.com/AnderEnder/aws-mfa-session"
+repository = "https://github.com/AnderEnder/aws-mfa-session"
+readme = "README.md"
+keywords = [
+    "aws",
+    "sts",
+    "token",
+    "credentials",
+]
+categories = ["command-line-utilities"]
+exclude = [
+    ".github/*",
+]
 edition = "2018"
 license = "MIT"
 
