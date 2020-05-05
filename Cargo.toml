@@ -25,7 +25,6 @@ license = "MIT"
 [dependencies]
 structopt = "0.3"
 dirs = "2"
-failure = "0.1"
 tokio = { version = "0.2", features = ["full"] }
 rusoto_credential = "0.43"
 rusoto_signature = "0.43"
