@@ -27,7 +27,7 @@ structopt = "0.3"
 dirs = "2"
 tokio = { version = "0.2", features = ["full"] }
 rusoto_credential = "0.43"
-rusoto_signature = "0.43"
+rusoto_signature = "0.44"
 regex = "1"
 
 [dependencies.rusoto_core]
