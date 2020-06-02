@@ -26,22 +26,22 @@ license = "MIT"
 structopt = "0.3"
 dirs = "2"
 tokio = { version = "0.2", features = ["full"] }
-rusoto_credential = "0.43"
-rusoto_signature = "0.43"
+rusoto_credential = "0.44"
+rusoto_signature = "0.44"
 regex = "1"
 
 [dependencies.rusoto_core]
-version = "0.43"
+version = "0.44"
 default-features = false
 features = [ "rustls" ]
 
 [dependencies.rusoto_iam]
-version = "0.43"
+version = "0.44"
 default-features = false
 features = [ "rustls" ]
 
 [dependencies.rusoto_sts]
-version = "0.43"
+version = "0.44"
 default-features = false
 features = [ "rustls" ]
 
