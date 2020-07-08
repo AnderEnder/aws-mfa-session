@@ -68,7 +68,7 @@ checksum = "f8aac770f1885fd7e387acedd76065302551364496e46b3dd00860b2f8359b9d"
 name = "aws-mfa-session"
 version = "0.2.3"
 dependencies = [
- "dirs",
+ "dirs 3.0.1",
  "regex",
  "rusoto_core",
  "rusoto_credential",
@@ -266,6 +266,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13aea89a5c93364a98e9b37b2fa237effbb694d5cfe01c5b70941f7eb087d5e3"
 dependencies = [
  "cfg-if",
+ "dirs-sys",
+]
+
+[[package]]
+name = "dirs"
+version = "3.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "142995ed02755914747cc6ca76fc7e4583cd18578746716d0508ea6ed558b9ff"
+dependencies = [
  "dirs-sys",
 ]
 
@@ -1009,7 +1018,7 @@ checksum = "60669ddc1bdbb83ce225593649d36b4c5f6bf9db47cc1ab3e81281abffc853f4"
 dependencies = [
  "async-trait",
  "chrono",
- "dirs",
+ "dirs 2.0.2",
  "futures",
  "hyper",
  "pin-project",
