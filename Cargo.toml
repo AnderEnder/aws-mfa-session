@@ -31,7 +31,7 @@ rusoto_signature = "0.44"
 regex = "1"
 
 [dependencies.rusoto_core]
-version = "0.44"
+version = "0.45"
 default-features = false
 features = [ "rustls" ]
 
