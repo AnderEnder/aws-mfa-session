@@ -26,7 +26,7 @@ license = "MIT"
 structopt = "0.3"
 dirs = "3"
 tokio = { version = "0.2", features = ["full"] }
-rusoto_credential = "0.44"
+rusoto_credential = "0.45"
 rusoto_signature = "0.44"
 regex = "1"
 
