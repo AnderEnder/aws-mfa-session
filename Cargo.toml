@@ -1,6 +1,6 @@
 [package]
 name = "aws-mfa-session"
-version = "0.2.3"
+version = "0.2.4"
 authors = ["Andrii Radyk <ander.ender@gmail.com>"]
 description = """
 A command line utility to generate temporary AWS credentials with virtual MFA device. Credentials could be exported into new shell or inserted into aws credentials file.
@@ -25,7 +25,7 @@ license = "MIT"
 [dependencies]
 structopt = "0.3"
 dirs = "3"
-tokio = { version = "0.2", features = ["full"] }
+tokio = { version = "0.2", features = ["macros"] }
 rusoto_credential = "0.45"
 rusoto_signature = "0.45"
 regex = "1"
@@ -46,5 +46,6 @@ default-features = false
 features = [ "rustls" ]
 
 [profile.release]
-lto = "fat"
-codegen-units = 1
+lto = "thin"
+#lto = "fat"
+#codegen-units = 1
