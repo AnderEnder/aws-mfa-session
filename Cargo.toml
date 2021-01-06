@@ -28,7 +28,7 @@ dirs = "3"
 tokio = { version = "0.3", features=["macros", "rt-multi-thread"] }
 tokio-compat-02 = "0.1"
 rusoto_credential = "0.45"
-rusoto_signature = "0.45"
+rusoto_signature = "0.46"
 regex = "1"
 
 [dependencies.rusoto_core]
