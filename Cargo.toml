@@ -27,7 +27,7 @@ structopt = "0.3"
 dirs = "3"
 tokio = { version = "0.3", features=["macros", "rt-multi-thread"] }
 tokio-compat-02 = "0.1"
-rusoto_credential = "0.45"
+rusoto_credential = "0.46"
 rusoto_signature = "0.45"
 regex = "1"
 
