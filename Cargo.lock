@@ -76,7 +76,7 @@ dependencies = [
  "rusoto_signature",
  "rusoto_sts",
  "structopt",
- "tokio 0.3.6",
+ "tokio 1.5.0",
  "tokio-compat-02",
 ]
 
@@ -1526,16 +1526,25 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "0.3.6"
+version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "720ba21c25078711bf456d607987d95bce90f7c3bea5abe1db587862e7a1e87c"
+checksum = "46409491c9375a693ce7032101970a54f8a2010efb77e13f70788f0d84489e39"
 dependencies = [
  "autocfg",
  "futures-core",
+ "pin-project-lite 0.2.0",
+]
+
+[[package]]
+name = "tokio"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83f0c8e7c0addab50b663055baf787d0af7f413a46e6e7fb9559a4e4db7137a5"
+dependencies = [
+ "autocfg",
  "num_cpus",
  "pin-project-lite 0.2.0",
- "slab",
- "tokio-macros 0.3.0",
+ "tokio-macros 1.1.0",
 ]
 
 [[package]]
@@ -1548,7 +1557,7 @@ dependencies = [
  "once_cell",
  "pin-project-lite 0.1.10",
  "tokio 0.2.22",
- "tokio 0.3.6",
+ "tokio 0.3.7",
 ]
 
 [[package]]
@@ -1564,9 +1573,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-macros"
-version = "0.3.0"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d48caa7b66c7a6ec943edf78d21a594fbeb24e536c781da67d5c32edec54103f"
+checksum = "caf7b11a536f46a809a8a9f0bb4237020f70ecbf115b842360afb127ea2fda57"
 dependencies = [
  "proc-macro2",
  "quote",
