@@ -24,7 +24,7 @@ license = "MIT"
 
 [dependencies]
 structopt = "0.3"
-dirs = "3"
+dirs = "4"
 tokio = { version = "1", features=["macros", "rt-multi-thread"] }
 rusoto_credential = "0.47"
 rusoto_signature = "0.47"
