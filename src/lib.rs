@@ -6,14 +6,13 @@ use credentials::*;
 use error::CliError;
 use shell::Shell;
 
-use rusoto_core::request::HttpClient;
-use rusoto_core::{Client, Region};
-use rusoto_credential::ProfileProvider;
-use rusoto_iam::{GetUserRequest, Iam, IamClient, ListMFADevicesRequest, ListMFADevicesResponse};
-use rusoto_sts::{GetCallerIdentityRequest, GetSessionTokenRequest, Sts, StsClient};
 use std::collections::HashMap;
 use std::env;
 use std::process::Command;
+
+use aws_config::meta::credentials::CredentialsProviderChain;
+use aws_sdk_iam::{Client, Region};
+use aws_sdk_sts::Client as StsClient;
 use structopt::clap::AppSettings;
 use structopt::StructOpt;
 
@@ -25,6 +24,10 @@ const DEFAULT_SHELL: &str = "cmd.exe";
 
 const AWS_PROFILE: &str = "AWS_PROFILE";
 const AWS_DEFAULT_REGION: &str = "AWS_DEFAULT_REGION";
+
+fn region(s: &str) -> Region {
+    Region::new(s.to_owned())
+}
 
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(
@@ -39,7 +42,7 @@ pub struct Args {
     #[structopt(long = "credentials-file", short = "f")]
     file: Option<String>,
     /// AWS region. AWS_REGION is used if not defined
-    #[structopt(long = "region", short = "r")]
+    #[structopt(long = "region", short = "r", parse(from_str = region))]
     region: Option<Region>,
     /// MFA code from MFA resource
     #[structopt(long = "code", short = "c")]
@@ -68,71 +71,71 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
         env::set_var(AWS_SHARED_CREDENTIALS_FILE, file);
     }
 
-    let provider = ProfileProvider::new()?;
-    let dispatcher = HttpClient::new()?;
-    let client = Client::new_with(provider, dispatcher);
-
-    let region: Region = match opts.region {
+    let region = match opts.region {
         Some(region) => region,
         None => match std::env::var(AWS_DEFAULT_REGION) {
-            Ok(s) => s.parse::<Region>()?,
-            _ => Default::default(),
+            Ok(s) => region(&s),
+            _ => Region::new("us-east-1"),
         },
     };
 
-    let iam_client = IamClient::new_with_client(client.clone(), region.clone());
+    let region_provider = aws_config::meta::region::RegionProviderChain::first_try(region.clone())
+        .or_default_provider();
 
+    let credentials_provider = CredentialsProviderChain::default_provider().await;
+    let shared_config = aws_config::from_env()
+        .region(region_provider)
+        .credentials_provider(credentials_provider)
+        .load()
+        .await;
+
+    let iam_client = Client::new(&shared_config);
     let serial_number = match opts.arn {
         None => {
-            // get mfa-device
-            let mfa_request = ListMFADevicesRequest {
-                marker: None,
-                max_items: Some(1),
-                user_name: None,
-            };
-            let response = iam_client.list_mfa_devices(mfa_request).await?;
-            let ListMFADevicesResponse { mfa_devices, .. } = response;
-            let serial = &mfa_devices.get(0).ok_or(CliError::NoMFA)?.serial_number;
-            Some(serial.to_owned())
+            // let response = iam_client.list_mfa_devices(mfa_request).await?;
+            let response = iam_client.list_mfa_devices().max_items(1).send().await?;
+
+            let mfa_devices = response.mfa_devices().ok_or(CliError::NoMFA)?;
+            let serial = &mfa_devices.get(0).ok_or(CliError::NoMFA)?.serial_number();
+            serial.clone().map(ToOwned::to_owned)
         }
         other => other,
     };
 
-    // get sts credentials
-    let sts_client = StsClient::new_with_client(client, region.clone());
-    let sts_request = GetSessionTokenRequest {
-        duration_seconds: None,
-        serial_number,
-        token_code: Some(opts.code),
-    };
+    let sts_client = StsClient::new(&shared_config);
 
     let credentials = sts_client
-        .get_session_token(sts_request)
+        .get_session_token()
+        .set_serial_number(serial_number)
+        .token_code(opts.code)
+        .send()
         .await?
-        .credentials
+        .credentials()
+        .map(ToOwned::to_owned)
         .ok_or(CliError::NoCredentials)?;
 
-    let identity = sts_client
-        .get_caller_identity(GetCallerIdentityRequest {})
-        .await?;
+    let identity = sts_client.get_caller_identity().send().await?;
 
     let user = iam_client
-        .get_user(GetUserRequest { user_name: None })
+        .get_user()
+        .send()
         .await?
-        .user;
+        .user()
+        .map(ToOwned::to_owned)
+        .ok_or(CliError::NoAccount)?;
 
     let account = identity.account.ok_or(CliError::NoAccount)?;
-    let ps = format!("AWS:{}@{} \\$ ", user.user_name, account);
+    let ps = format!("AWS:{}@{} \\$ ", user.user_name().unwrap(), account);
     let shell = std::env::var("SHELL").unwrap_or_else(|_| DEFAULT_SHELL.to_owned());
 
     if let Some(name) = opts.session_profile {
         let c = credentials.clone();
         let profile = Profile {
             name,
-            access_key_id: c.access_key_id,
-            secret_access_key: c.secret_access_key,
-            session_token: Some(c.session_token),
-            region: Some(region.name().to_owned()),
+            access_key_id: c.access_key_id().unwrap().to_owned(),
+            secret_access_key: c.secret_access_key().unwrap().to_owned(),
+            session_token: c.session_token().map(ToOwned::to_owned),
+            region: Some(region.to_string()),
         };
         update_credentials(&profile)?;
     }
@@ -140,9 +143,9 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
     if opts.shell {
         let c = credentials.clone();
         let envs: HashMap<&str, String> = [
-            ("AWS_ACCESS_KEY", c.access_key_id),
-            ("AWS_SECRET_KEY", c.secret_access_key),
-            ("AWS_SESSION_TOKEN", c.session_token),
+            ("AWS_ACCESS_KEY", c.access_key_id().unwrap().to_owned()),
+            ("AWS_SECRET_KEY", c.secret_access_key().unwrap().to_owned()),
+            ("AWS_SESSION_TOKEN", c.session_token().unwrap().to_owned()),
             ("PS1", ps.clone()),
         ]
         .iter()
@@ -154,10 +157,10 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
 
     if opts.export {
         Shell::from(shell.as_str()).export(
-            credentials.access_key_id,
-            credentials.secret_access_key,
-            credentials.session_token,
-            ps,
+            credentials.access_key_id().unwrap(),
+            credentials.secret_access_key().unwrap(),
+            credentials.session_token().unwrap(),
+            &ps,
         );
     }
 

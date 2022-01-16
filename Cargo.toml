@@ -26,26 +26,12 @@ license = "MIT"
 structopt = "0.3"
 dirs = "4"
 tokio = { version = "1", features=["macros", "rt-multi-thread"] }
-rusoto_credential = "0.47"
-rusoto_signature = "0.47"
 regex = "1"
-
-[dependencies.rusoto_core]
-version = "0.47"
-default-features = false
-features = [ "rustls" ]
-
-[dependencies.rusoto_iam]
-version = "0.47"
-default-features = false
-features = [ "rustls" ]
-
-[dependencies.rusoto_sts]
-version = "0.47"
-default-features = false
-features = [ "rustls" ]
+aws-types = "0.4"
+aws-config = "0.4"
+aws-sdk-iam = "0.4"
+aws-sdk-sts = "0.4"
 
 [profile.release]
-lto = "thin"
-#lto = "fat"
-#codegen-units = 1
+lto = "fat"
+codegen-units = 1
