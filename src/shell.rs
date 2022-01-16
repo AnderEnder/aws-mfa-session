@@ -8,7 +8,7 @@ pub enum Shell {
 }
 
 impl Shell {
-    pub fn export(self, id: String, secret: String, token: String, ps: String) {
+    pub fn export(self, id: &str, secret: &str, token: &str, ps: &str) {
         match self {
             Shell::Bash | Shell::Sh | Shell::Zsh => {
                 println!("export AWS_ACCESS_KEY={}", id);

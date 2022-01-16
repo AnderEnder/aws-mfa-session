@@ -1,9 +1,8 @@
-use rusoto_core::request::{BufferedHttpResponse, TlsError};
-use rusoto_core::RusotoError;
-use rusoto_credential::CredentialsError;
-use rusoto_iam::{GetUserError, ListMFADevicesError};
-use rusoto_signature::region::ParseRegionError;
-use rusoto_sts::{GetCallerIdentityError, GetSessionTokenError};
+use std::fmt::Display;
+
+use aws_sdk_iam::{error::ListMFADevicesError, SdkError};
+use aws_sdk_sts::error::{GetCallerIdentityError, GetSessionTokenError};
+use aws_types::credentials::CredentialsError;
 
 #[derive(Debug)]
 pub enum CliError {
@@ -13,8 +12,7 @@ pub enum CliError {
     ListMFADevicesError(ListMFADevicesError),
     GetSessionTokenError(GetSessionTokenError),
     GetCallerIdentityError(GetCallerIdentityError),
-    Rusoto(String),
-    RusotoUnknown(BufferedHttpResponse),
+    SdkError(String),
     IoError(std::io::Error),
 }
 
@@ -27,8 +25,7 @@ impl std::fmt::Display for CliError {
             CliError::ListMFADevicesError(e) => write!(f, "No mfa devices: {}", e),
             CliError::GetSessionTokenError(e) => write!(f, "Cannot receive token: {}", e),
             CliError::GetCallerIdentityError(e) => write!(f, "Error: {}", e),
-            CliError::Rusoto(e) => write!(f, "Error: {}", e),
-            CliError::RusotoUnknown(e) => write!(f, "Error:\n{}", e.body_as_str()),
+            CliError::SdkError(e) => write!(f, "Error: {}", e),
             CliError::IoError(e) => write!(f, "Error: {}", e),
         }
     }
@@ -44,73 +41,18 @@ impl From<std::io::Error> for CliError {
 
 impl From<CredentialsError> for CliError {
     fn from(e: CredentialsError) -> Self {
-        CliError::Rusoto(e.message)
+        CliError::SdkError(e.to_string())
     }
 }
 
-impl From<TlsError> for CliError {
-    fn from(e: TlsError) -> Self {
-        CliError::Rusoto(e.to_string())
-    }
-}
-
-impl From<RusotoError<ListMFADevicesError>> for CliError {
-    fn from(e: RusotoError<ListMFADevicesError>) -> Self {
+impl<E: Display> From<SdkError<E>> for CliError {
+    fn from(e: SdkError<E>) -> Self {
         match e {
-            RusotoError::Service(e) => Self::Rusoto(e.to_string()),
-            RusotoError::HttpDispatch(e) => Self::Rusoto(e.to_string()),
-            RusotoError::Credentials(e) => Self::Rusoto(e.to_string()),
-            RusotoError::Validation(e) => Self::Rusoto(e),
-            RusotoError::ParseError(e) => Self::Rusoto(e),
-            RusotoError::Unknown(e) => Self::RusotoUnknown(e),
-            RusotoError::Blocking => Self::Rusoto("Blocking".to_owned()),
+            SdkError::ConstructionFailure(e) => Self::SdkError(e.to_string()),
+            SdkError::TimeoutError(e) => Self::SdkError(e.to_string()),
+            SdkError::DispatchFailure(e) => Self::SdkError(e.to_string()),
+            SdkError::ResponseError { err, raw: _ } => Self::SdkError(err.to_string()),
+            SdkError::ServiceError { err, raw: _ } => Self::SdkError(err.to_string()),
         }
-    }
-}
-
-impl From<RusotoError<GetSessionTokenError>> for CliError {
-    fn from(e: RusotoError<GetSessionTokenError>) -> Self {
-        match e {
-            RusotoError::Service(e) => Self::Rusoto(e.to_string()),
-            RusotoError::HttpDispatch(e) => Self::Rusoto(e.to_string()),
-            RusotoError::Credentials(e) => Self::Rusoto(e.to_string()),
-            RusotoError::Validation(e) => Self::Rusoto(e),
-            RusotoError::ParseError(e) => Self::Rusoto(e),
-            RusotoError::Unknown(e) => Self::RusotoUnknown(e),
-            RusotoError::Blocking => Self::Rusoto("Blocking".to_owned()),
-        }
-    }
-}
-
-impl From<RusotoError<GetUserError>> for CliError {
-    fn from(e: RusotoError<GetUserError>) -> Self {
-        match e {
-            RusotoError::Service(e) => Self::Rusoto(e.to_string()),
-            RusotoError::Credentials(e) => Self::Rusoto(e.to_string()),
-            RusotoError::HttpDispatch(e) => Self::Rusoto(e.to_string()),
-            RusotoError::Validation(e) => Self::Rusoto(e),
-            RusotoError::ParseError(e) => Self::Rusoto(e),
-            RusotoError::Unknown(e) => Self::RusotoUnknown(e),
-            RusotoError::Blocking => Self::Rusoto("Blocking".to_owned()),
-        }
-    }
-}
-
-impl From<RusotoError<GetCallerIdentityError>> for CliError {
-    fn from(e: RusotoError<GetCallerIdentityError>) -> Self {
-        match e {
-            RusotoError::Service(e) => Self::GetCallerIdentityError(e),
-            RusotoError::Credentials(e) => Self::Rusoto(e.to_string()),
-            RusotoError::HttpDispatch(e) => Self::Rusoto(e.to_string()),
-            RusotoError::Validation(e) => Self::Rusoto(e),
-            RusotoError::ParseError(e) => Self::Rusoto(e),
-            RusotoError::Unknown(e) => Self::RusotoUnknown(e),
-            RusotoError::Blocking => Self::Rusoto("Blocking".to_owned()),
-        }
-    }
-}
-impl From<ParseRegionError> for CliError {
-    fn from(e: ParseRegionError) -> Self {
-        Self::Rusoto(e.to_string())
     }
 }
