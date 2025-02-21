@@ -127,7 +127,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-iam",
  "aws-sdk-sts 0.4.1",
- "aws-types 0.4.1",
+ "aws-types 0.6.0",
  "dirs",
  "regex",
  "structopt",
@@ -306,7 +306,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b69dad0aefb1b64e63e0d3a1310dc50191608d8c9e226f2f241f344a7173642e"
 dependencies = [
  "futures-util",
- "pin-project-lite 0.2.8",
+ "pin-project-lite",
  "tokio",
  "tokio-stream",
 ]
@@ -329,7 +329,7 @@ dependencies = [
  "hyper-rustls",
  "lazy_static",
  "pin-project",
- "pin-project-lite 0.2.8",
+ "pin-project-lite",
  "tokio",
  "tower",
  "tracing",
@@ -474,7 +474,7 @@ version = "0.36.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cde96306a54777ec8781aa510830e242de614aa5746274713f5ecac0779f644f"
 dependencies = [
- "itoa 1.0.1",
+ "itoa",
  "num-integer",
  "ryu",
  "time",
