@@ -24,7 +24,7 @@ license = "MIT"
 
 [dependencies]
 structopt = "0.3"
-dirs = "4"
+dirs = "5"
 tokio = { version = "1", features=["macros", "rt-multi-thread"] }
 regex = "1"
 aws-types = "0.4"
