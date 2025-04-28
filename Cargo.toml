@@ -9,28 +9,21 @@ documentation = "https://github.com/AnderEnder/aws-mfa-session"
 homepage = "https://github.com/AnderEnder/aws-mfa-session"
 repository = "https://github.com/AnderEnder/aws-mfa-session"
 readme = "README.md"
-keywords = [
-    "aws",
-    "sts",
-    "token",
-    "credentials",
-]
+keywords = ["aws", "sts", "token", "credentials"]
 categories = ["command-line-utilities"]
-exclude = [
-    ".github/*",
-]
-edition = "2018"
+exclude = [".github/*"]
+edition = "2024"
 license = "MIT"
 
 [dependencies]
-structopt = "0.3"
-dirs = "4"
-tokio = { version = "1", features=["macros", "rt-multi-thread"] }
+dirs = "6"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 regex = "1"
-aws-types = "0.4"
-aws-config = "0.6"
-aws-sdk-iam = "0.4"
-aws-sdk-sts = "0.4"
+aws-types = "1"
+aws-config = "1"
+aws-sdk-iam = "1"
+aws-sdk-sts = "1"
+clap = { version = "4.4", features = ["derive"] }
 
 [profile.release]
 lto = "fat"
