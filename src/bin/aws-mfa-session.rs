@@ -1,12 +1,13 @@
-use aws_mfa_session::{run, Args};
+use aws_mfa_session::{Args, run};
+use clap::Parser;
 use std::process::exit;
-use structopt::StructOpt;
 
 #[tokio::main]
 async fn main() {
-    let args = Args::from_args();
-    if let Err(err) = run(args).await {
-        eprintln!("{}", err);
+    let opts = Args::parse();
+
+    if let Err(e) = run(opts).await {
+        eprintln!("Error: {}", e);
         exit(1);
     }
 }

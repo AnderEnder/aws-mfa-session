@@ -1,5 +1,5 @@
 use dirs::home_dir;
-use regex::{escape, Regex};
+use regex::{Regex, escape};
 use std::path::PathBuf;
 use std::{fs, io};
 

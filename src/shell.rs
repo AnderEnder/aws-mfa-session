@@ -1,4 +1,6 @@
+#[derive(Default)]
 pub enum Shell {
+    #[default]
     Bash,
     Sh,
     Zsh,
@@ -39,12 +41,6 @@ impl Shell {
                 );
             }
         }
-    }
-}
-
-impl Default for Shell {
-    fn default() -> Self {
-        Shell::Bash
     }
 }
 
