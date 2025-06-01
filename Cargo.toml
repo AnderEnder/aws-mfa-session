@@ -25,6 +25,10 @@ aws-sdk-iam = "1"
 aws-sdk-sts = "1"
 clap = { version = "4.5", features = ["derive"] }
 
+[profile.dev]
+debug = false
+
 [profile.release]
+strip = true
 lto = "fat"
 codegen-units = 1
