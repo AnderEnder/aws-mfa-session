@@ -1,6 +1,6 @@
 [package]
 name = "aws-mfa-session"
-version = "0.2.4"
+version = "0.3.0"
 authors = ["Andrii Radyk <ander.ender@gmail.com>"]
 description = """
 A command line utility to generate temporary AWS credentials with virtual MFA device. Credentials could be exported into new shell or inserted into aws credentials file.
