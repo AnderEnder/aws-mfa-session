@@ -14,15 +14,12 @@ jobs:
       matrix:
         os: [ubuntu-latest, macOS-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-        if: matrix.os == 'macOS-latest'
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - name: build
         run: cargo build --verbose
       - name: test
         run: cargo test --no-fail-fast --verbose --all -- --nocapture
         env:
           RUST_BACKTRACE: 1
+          RUST_LOG: trace
