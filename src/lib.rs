@@ -101,7 +101,7 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
 
             let mfa_devices = response.mfa_devices();
             let serial = &mfa_devices.first().ok_or(CliError::NoMFA)?.serial_number();
-            serial.clone().to_owned()
+            (*serial).to_owned()
         }
         Some(other) => other,
     };
