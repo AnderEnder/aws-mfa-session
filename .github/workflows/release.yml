@@ -107,6 +107,7 @@ jobs:
     runs-on: windows-11-arm
     steps:
       - uses: actions/checkout@v2
+      - uses: dtolnay/rust-toolchain@stable
       - name: build release
         run: cargo build --release --verbose
       - name: archive
