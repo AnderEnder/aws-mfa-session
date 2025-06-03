@@ -66,13 +66,13 @@ pub struct Args {
 
 pub async fn run(opts: Args) -> Result<(), CliError> {
     if !opts.code.chars().all(char::is_numeric) || opts.code.len() != 6 {
-        return Err(CliError::SdkError(
+        return Err(CliError::ValidationError(
             "MFA code must be exactly 6 digits".to_string(),
         ));
     }
 
     if opts.duration < 900 || opts.duration > 129600 {
-        return Err(CliError::SdkError(
+        return Err(CliError::ValidationError(
             "Session duration must be between 900 and 129600 seconds (15 minutes to 36 hours)"
                 .to_string(),
         ));
