@@ -73,6 +73,18 @@ Generate session credentials with defined profile and non-default credential fil
 aws-mfa-session --credentials-file ~/.aws/credentials2 --profile dev --update-profile mfa-session --code 123456
 ```
 
+Generate session credentials with custom duration (2 hours):
+
+```sh
+aws-mfa-session --code 123456 --duration 7200 -e
+```
+
+Generate session credentials with maximum duration (36 hours):
+
+```sh
+aws-mfa-session --code 123456 --duration 129600 -e
+```
+
 ## Installation
 
 ### Pre-built Binaries
@@ -106,17 +118,27 @@ cargo install --path .
 ## Usage
 
 ```
-aws-mfa-session [OPTIONS] --code <CODE>
+Usage: aws-mfa-session [OPTIONS] --code <CODE>
 
 Options:
-  -c, --code <CODE>                    MFA code from MFA resource
-  -p, --profile <PROFILE>              AWS credential profile to use
-  -f, --credentials-file <FILE>        AWS credentials file location
-  -r, --region <REGION>                AWS region
-  -a, --arn <ARN>                      MFA device ARN from user profile
-  -s                                   Run shell with AWS credentials as environment variables
-  -e                                   Print(export) AWS credentials as environment variables
-  -u, --update-profile <PROFILE>       Update AWS credential profile with temporary session credentials
-  -h, --help                           Print help
-  -V, --version                        Print version
+  -p, --profile <PROFILE>
+          AWS credential profile to use. AWS_PROFILE is used by default
+  -f, --credentials-file <FILE>
+          AWS credentials file location to use. AWS_SHARED_CREDENTIALS_FILE is used if not defined
+  -r, --region <REGION>
+          AWS region. AWS_REGION is used if not defined
+  -c, --code <CODE>
+          MFA code from MFA resource
+  -a, --arn <ARN>
+          MFA device ARN from user profile. It could be detected automatically
+  -d, --duration <DURATION>
+          Session duration in seconds (900-129600) [default: 3600]
+  -s
+          Run shell with AWS credentials as environment variables
+  -e
+          Print(export) AWS credentials as environment variables
+  -u, --update-profile <SESSION_PROFILE>
+          Update AWS credential profile with temporary session credentials
+  -h, --help
+          Print help
 ```
