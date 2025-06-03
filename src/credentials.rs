@@ -68,9 +68,8 @@ fn credential_file() -> io::Result<PathBuf> {
     let file = match std::env::var(AWS_SHARED_CREDENTIALS_FILE) {
         Ok(s) => PathBuf::from(s),
         _ => {
-            let mut file = home_dir().ok_or_else(|| {
-                io::Error::other("Cannot find home directory")
-            })?;
+            let mut file =
+                home_dir().ok_or_else(|| io::Error::other("Cannot find home directory"))?;
             file.push(".aws");
             file.push("credentials");
             file
