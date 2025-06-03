@@ -1,7 +1,9 @@
+mod args;
 mod credentials;
 mod error;
 mod shell;
 
+pub use args::Args;
 use credentials::*;
 use error::CliError;
 use shell::Shell;
@@ -10,10 +12,9 @@ use std::collections::HashMap;
 use std::env;
 use std::process::Command;
 
-use aws_config::{BehaviorVersion, Region, meta::credentials::CredentialsProviderChain};
+use aws_config::{BehaviorVersion, meta::credentials::CredentialsProviderChain};
 use aws_sdk_iam::Client;
 use aws_sdk_sts::Client as StsClient;
-use clap::Parser;
 
 #[cfg(not(target_os = "windows"))]
 const DEFAULT_SHELL: &str = "/bin/sh";
@@ -22,64 +23,9 @@ const DEFAULT_SHELL: &str = "/bin/sh";
 const DEFAULT_SHELL: &str = "cmd.exe";
 
 const AWS_PROFILE: &str = "AWS_PROFILE";
-const AWS_DEFAULT_REGION: &str = "AWS_DEFAULT_REGION";
-const MIN_SESSION_DURATION: i32 = 900; // 15 minutes
-const MAX_SESSION_DURATION: i32 = 129600; // 36 hours
-
-fn region(s: &str) -> Result<Region, CliError> {
-    Ok(Region::new(s.to_owned()))
-}
-
-#[derive(Parser, Debug, Clone)]
-#[command(
-    name = "aws-mfa-session",
-    about = "AWS MFA session manager",
-    long_about = None,
-)]
-pub struct Args {
-    /// AWS credential profile to use. AWS_PROFILE is used by default
-    #[arg(long = "profile", short = 'p')]
-    profile: Option<String>,
-    /// AWS credentials file location to use. AWS_SHARED_CREDENTIALS_FILE is used if not defined
-    #[arg(long = "credentials-file", short = 'f')]
-    file: Option<String>,
-    /// AWS region. AWS_REGION is used if not defined
-    #[arg(long = "region", short = 'r', value_parser = region)]
-    region: Option<Region>,
-    /// MFA code from MFA resource
-    #[arg(long = "code", short = 'c')]
-    code: String,
-    /// MFA device ARN from user profile. It could be detected automatically
-    #[arg(long = "arn", short = 'a')]
-    arn: Option<String>,
-    /// Session duration in seconds (900-129600)
-    #[arg(long = "duration", short = 'd', default_value = "3600")]
-    duration: i32,
-    /// Run shell with AWS credentials as environment variables
-    #[arg(short = 's')]
-    shell: bool,
-    /// Print(export) AWS credentials as environment variables
-    #[arg(short = 'e')]
-    export: bool,
-    /// Update AWS credential profile with temporary session credentials
-    #[arg(long = "update-profile", short = 'u')]
-    session_profile: Option<String>,
-}
+const AWS_SHARED_CREDENTIALS_FILE: &str = "AWS_SHARED_CREDENTIALS_FILE";
 
 pub async fn run(opts: Args) -> Result<(), CliError> {
-    if !opts.code.chars().all(char::is_numeric) || opts.code.len() != 6 {
-        return Err(CliError::ValidationError(
-            "MFA code must be exactly 6 digits".to_string(),
-        ));
-    }
-
-    if opts.duration < MIN_SESSION_DURATION || opts.duration > MAX_SESSION_DURATION {
-        return Err(CliError::ValidationError(format!(
-            "Session duration must be between {} and {} seconds (15 minutes to 36 hours)",
-            MIN_SESSION_DURATION, MAX_SESSION_DURATION
-        )));
-    }
-
     // ProfileProvider is limited, but AWS_PROFILE is used elsewhere
     if let Some(profile) = opts.profile {
         unsafe {
@@ -93,16 +39,9 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
         }
     }
 
-    let region = match opts.region {
-        Some(region) => region,
-        None => match std::env::var(AWS_DEFAULT_REGION) {
-            Ok(s) => region(&s)?,
-            _ => Region::new("us-east-1"),
-        },
-    };
-
-    let region_provider = aws_config::meta::region::RegionProviderChain::first_try(region.clone())
-        .or_default_provider();
+    let region_provider =
+        aws_config::meta::region::RegionProviderChain::first_try(opts.region.clone())
+            .or_default_provider();
 
     let credentials_provider = CredentialsProviderChain::default_provider().await;
     let shared_config = aws_config::defaults(BehaviorVersion::latest())
@@ -158,7 +97,7 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
             access_key_id: c.access_key_id().to_owned(),
             secret_access_key: c.secret_access_key().to_owned(),
             session_token: Some(c.session_token().to_owned()),
-            region: Some(region.to_string()),
+            region: Some(opts.region.to_string()),
         };
         update_credentials(&profile)?;
     }
