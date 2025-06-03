@@ -46,14 +46,14 @@ impl Shell {
 
 impl<'a> From<&'a str> for Shell {
     fn from(s: &'a str) -> Self {
-        match s {
+        let s = s.to_ascii_lowercase();
+        match s.as_str() {
             "/bin/bash" | "/usr/bin/bash" | "/usr/local/bin/bash" => Shell::Bash,
             "/bin/zsh" | "/usr/bin/zsh" | "/usr/local/bin/zsh" => Shell::Zsh,
             "/bin/sh" => Shell::Sh,
             "/bin/fish" | "/usr/local/bin/fish" => Shell::Fish,
-            // to_lowercase ?
             s if s.ends_with("cmd.exe") => Shell::Cmd,
-            s if s.ends_with("Powershell.exe") => Shell::PowerShell,
+            s if s.ends_with("powershell.exe") => Shell::PowerShell,
             _ => Default::default(),
         }
     }
