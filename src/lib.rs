@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::env;
 use std::process::Command;
 
-use aws_config::{BehaviorVersion, meta::credentials::CredentialsProviderChain};
+use aws_config::{BehaviorVersion, Region, meta::credentials::CredentialsProviderChain};
 use aws_sdk_iam::Client;
 use aws_sdk_sts::Client as StsClient;
 
@@ -23,6 +23,8 @@ const DEFAULT_SHELL: &str = "/bin/sh";
 const DEFAULT_SHELL: &str = "cmd.exe";
 
 const AWS_PROFILE: &str = "AWS_PROFILE";
+const AWS_DEFAULT_REGION: &str = "AWS_DEFAULT_REGION";
+
 const AWS_SHARED_CREDENTIALS_FILE: &str = "AWS_SHARED_CREDENTIALS_FILE";
 
 pub async fn run(opts: Args) -> Result<(), CliError> {
@@ -41,7 +43,9 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
 
     let region_provider =
         aws_config::meta::region::RegionProviderChain::first_try(opts.region.clone())
-            .or_default_provider();
+            .or_default_provider()
+            .or_else(env::var(AWS_DEFAULT_REGION).ok().map(Region::new))
+            .or_else(Region::new("us-east-1"));
 
     let credentials_provider = CredentialsProviderChain::default_provider().await;
     let shared_config = aws_config::defaults(BehaviorVersion::latest())
@@ -97,7 +101,7 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
             access_key_id: c.access_key_id().to_owned(),
             secret_access_key: c.secret_access_key().to_owned(),
             session_token: Some(c.session_token().to_owned()),
-            region: Some(opts.region.to_string()),
+            region: opts.region.map(|r| r.to_string()),
         };
         update_credentials(&profile)?;
     }
