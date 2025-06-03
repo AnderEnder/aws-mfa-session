@@ -62,6 +62,12 @@ pub struct Args {
 }
 
 pub async fn run(opts: Args) -> Result<(), CliError> {
+    if !opts.code.chars().all(char::is_numeric) || opts.code.len() != 6 {
+        return Err(CliError::SdkError(
+            "MFA code must be exactly 6 digits".to_string(),
+        ));
+    }
+
     // ProfileProvider is limited, but AWS_PROFILE is used elsewhere
     if let Some(profile) = opts.profile {
         unsafe {
