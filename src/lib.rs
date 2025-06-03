@@ -147,8 +147,8 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
     if opts.shell {
         let c = credentials.clone();
         let envs: HashMap<&str, String> = [
-            ("AWS_ACCESS_KEY", c.access_key_id().to_owned()),
-            ("AWS_SECRET_KEY", c.secret_access_key().to_owned()),
+            ("AWS_ACCESS_KEY_ID", c.access_key_id().to_owned()),
+            ("AWS_SECRET_ACCESS_KEY", c.secret_access_key().to_owned()),
             ("AWS_SESSION_TOKEN", c.session_token().to_owned()),
             ("PS1", ps.clone()),
         ]
