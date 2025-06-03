@@ -50,6 +50,9 @@ pub struct Args {
     /// MFA device ARN from user profile. It could be detected automatically
     #[arg(long = "arn", short = 'a')]
     arn: Option<String>,
+    /// Session duration in seconds (900-129600)
+    #[arg(long = "duration", short = 'd', default_value = "3600")]
+    duration: i32,
     /// Run shell with AWS credentials as environment variables
     #[arg(short = 's')]
     shell: bool,
@@ -65,6 +68,13 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
     if !opts.code.chars().all(char::is_numeric) || opts.code.len() != 6 {
         return Err(CliError::SdkError(
             "MFA code must be exactly 6 digits".to_string(),
+        ));
+    }
+
+    if opts.duration < 900 || opts.duration > 129600 {
+        return Err(CliError::SdkError(
+            "Session duration must be between 900 and 129600 seconds (15 minutes to 36 hours)"
+                .to_string(),
         ));
     }
 
@@ -118,6 +128,7 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
         .get_session_token()
         .set_serial_number(Some(serial_number))
         .token_code(opts.code)
+        .duration_seconds(opts.duration)
         .send()
         .await?
         .credentials()
