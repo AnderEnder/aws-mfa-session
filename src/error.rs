@@ -7,6 +7,7 @@ use aws_sdk_sts::operation::{
 
 #[derive(Debug)]
 pub enum CliError {
+    ValidationError(String),
     NoMFA,
     NoCredentials,
     NoAccount,
@@ -20,6 +21,7 @@ pub enum CliError {
 impl std::fmt::Display for CliError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
+            CliError::ValidationError(e) => write!(f, "Validation error: {}", e),
             CliError::NoMFA => write!(f, "No MFA device in user profile"),
             CliError::NoCredentials => write!(f, "No returned credentials"),
             CliError::NoAccount => write!(f, "No returned account"),

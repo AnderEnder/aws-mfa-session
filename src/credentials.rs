@@ -69,7 +69,7 @@ fn credential_file() -> io::Result<PathBuf> {
         Ok(s) => PathBuf::from(s),
         _ => {
             let mut file = home_dir().ok_or_else(|| {
-                io::Error::new(io::ErrorKind::Other, "Cannot find home directory")
+                io::Error::other("Cannot find home directory")
             })?;
             file.push(".aws");
             file.push("credentials");
