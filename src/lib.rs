@@ -23,6 +23,8 @@ const DEFAULT_SHELL: &str = "cmd.exe";
 
 const AWS_PROFILE: &str = "AWS_PROFILE";
 const AWS_DEFAULT_REGION: &str = "AWS_DEFAULT_REGION";
+const MIN_SESSION_DURATION: i32 = 900; // 15 minutes
+const MAX_SESSION_DURATION: i32 = 129600; // 36 hours
 
 fn region(s: &str) -> Result<Region, CliError> {
     Ok(Region::new(s.to_owned()))
@@ -71,11 +73,11 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
         ));
     }
 
-    if opts.duration < 900 || opts.duration > 129600 {
-        return Err(CliError::ValidationError(
-            "Session duration must be between 900 and 129600 seconds (15 minutes to 36 hours)"
-                .to_string(),
-        ));
+    if opts.duration < MIN_SESSION_DURATION || opts.duration > MAX_SESSION_DURATION {
+        return Err(CliError::ValidationError(format!(
+            "Session duration must be between {} and {} seconds (15 minutes to 36 hours)",
+            MIN_SESSION_DURATION, MAX_SESSION_DURATION
+        )));
     }
 
     // ProfileProvider is limited, but AWS_PROFILE is used elsewhere
