@@ -26,6 +26,4 @@ jobs:
         with:
           components: rustfmt
       - name: fmt check
-        uses: mbrobbel/rustfmt-check@master
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+        run: cargo fmt --all -- --check

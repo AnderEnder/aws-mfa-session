@@ -2,6 +2,7 @@ use dirs::home_dir;
 use regex::{Regex, escape};
 use std::path::PathBuf;
 use std::{fs, io};
+use tempfile::NamedTempFile;
 
 pub struct Profile {
     pub name: String,
@@ -79,10 +80,24 @@ fn credential_file() -> io::Result<PathBuf> {
 }
 
 pub fn update_credentials(profile: &Profile) -> io::Result<()> {
-    let file = credential_file()?;
-    let config = fs::read_to_string(&file)?;
+    let file_path = credential_file()?;
+    let config = fs::read_to_string(&file_path)?;
     let updated_config = update_profile(&config, profile);
-    fs::write(file, updated_config)
+
+    let original_metadata = fs::metadata(&file_path)?;
+    let original_permissions = original_metadata.permissions();
+
+    let temp_dir = file_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let temp_file = NamedTempFile::new_in(temp_dir)?;
+
+    fs::write(temp_file.path(), updated_config)?;
+    fs::set_permissions(temp_file.path(), original_permissions)?;
+
+    temp_file.persist(&file_path)?;
+
+    Ok(())
 }
 
 #[cfg(test)]
