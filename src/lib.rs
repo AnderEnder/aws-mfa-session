@@ -10,6 +10,7 @@ use shell::Shell;
 
 use std::collections::HashMap;
 use std::env;
+use std::io;
 use std::process::Command;
 
 use aws_config::{BehaviorVersion, Region, meta::credentials::CredentialsProviderChain};
@@ -122,12 +123,14 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
     }
 
     if opts.export {
+        let mut stdout = io::stdout().lock();
         Shell::from(shell.as_str()).export(
+            &mut stdout,
             credentials.access_key_id(),
             credentials.secret_access_key(),
             credentials.session_token(),
             &ps,
-        );
+        )?;
     }
 
     Ok(())
