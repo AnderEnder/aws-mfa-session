@@ -28,7 +28,7 @@ pub struct Args {
     pub profile: Option<String>,
     /// AWS credentials file location to use. AWS_SHARED_CREDENTIALS_FILE is used if not defined
     #[arg(long = "credentials-file", short = 'f')]
-    pub file: Option<String>,
+    pub credentials_file: Option<String>,
     /// AWS region. AWS_REGION is used if not defined
     #[arg(long = "region", short = 'r', value_parser = region)]
     pub region: Option<Region>,
@@ -124,7 +124,10 @@ mod tests {
         assert!(args.is_ok());
         let args = args.unwrap();
         assert_eq!(args.profile, Some("test-profile".to_string()));
-        assert_eq!(args.file, Some("/custom/path/credentials".to_string()));
+        assert_eq!(
+            args.credentials_file,
+            Some("/custom/path/credentials".to_string())
+        );
         assert_eq!(args.region.unwrap().to_string(), "us-west-2");
         assert_eq!(args.code, "654321");
         assert_eq!(
@@ -193,7 +196,7 @@ mod tests {
         assert!(args.is_ok());
         let args = args.unwrap();
         assert_eq!(args.profile, Some("profile".to_string()));
-        assert_eq!(args.file, Some("/path/to/file".to_string()));
+        assert_eq!(args.credentials_file, Some("/path/to/file".to_string()));
         assert_eq!(args.region.unwrap().to_string(), "ap-southeast-1");
         assert_eq!(args.code, "123456");
         assert_eq!(args.arn, Some("arn:aws:iam::123:mfa/user".to_string()));
