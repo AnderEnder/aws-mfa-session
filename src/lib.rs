@@ -36,7 +36,7 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
         }
     }
 
-    if let Some(file) = opts.file {
+    if let Some(file) = opts.credentials_file {
         unsafe {
             env::set_var(AWS_SHARED_CREDENTIALS_FILE, file);
         }
