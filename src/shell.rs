@@ -40,10 +40,10 @@ impl Shell {
                 let escaped_token = Self::escape_unix_quotes(token);
                 let escaped_ps = Self::escape_unix_quotes(ps);
 
-                writeln!(stdout, "export AWS_ACCESS_KEY_ID='{}'", escaped_id)?;
-                writeln!(stdout, "export AWS_SECRET_ACCESS_KEY='{}'", escaped_secret)?;
-                writeln!(stdout, "export AWS_SESSION_TOKEN='{}'", escaped_token)?;
-                writeln!(stdout, "export PS1='{}'", escaped_ps)?;
+                writeln!(stdout, "export AWS_ACCESS_KEY_ID='{escaped_id}'")?;
+                writeln!(stdout, "export AWS_SECRET_ACCESS_KEY='{escaped_secret}'")?;
+                writeln!(stdout, "export AWS_SESSION_TOKEN='{escaped_token}'")?;
+                writeln!(stdout, "export PS1='{escaped_ps}'")?;
             }
             Shell::Fish => {
                 let escaped_id = Self::escape_unix_quotes(id);
@@ -51,23 +51,19 @@ impl Shell {
                 let escaped_token = Self::escape_unix_quotes(token);
                 let escaped_ps = Self::escape_unix_quotes(ps);
 
-                writeln!(stdout, "set -x AWS_ACCESS_KEY_ID \"{}\"", escaped_id)?;
-                writeln!(
-                    stdout,
-                    "set -x AWS_SECRET_ACCESS_KEY \"{}\"",
-                    escaped_secret
-                )?;
-                writeln!(stdout, "set -x AWS_SESSION_TOKEN \"{}\"", escaped_token)?;
-                writeln!(stdout, "set -x PS1 \"{}\"", escaped_ps)?;
+                writeln!(stdout, "set -x AWS_ACCESS_KEY_ID \"{escaped_id}\"")?;
+                writeln!(stdout, "set -x AWS_SECRET_ACCESS_KEY \"{escaped_secret}\"")?;
+                writeln!(stdout, "set -x AWS_SESSION_TOKEN \"{escaped_token}\"")?;
+                writeln!(stdout, "set -x PS1 \"{escaped_ps}\"")?;
             }
             Shell::Cmd => {
                 let escaped_id = Self::escape_cmd_quotes(id);
                 let escaped_secret = Self::escape_cmd_quotes(secret);
                 let escaped_token = Self::escape_cmd_quotes(token);
 
-                writeln!(stdout, "set \"AWS_ACCESS_KEY_ID={}\"", escaped_id)?;
-                writeln!(stdout, "set \"AWS_SECRET_ACCESS_KEY={}\"", escaped_secret)?;
-                writeln!(stdout, "set \"AWS_SESSION_TOKEN={}\"", escaped_token)?;
+                writeln!(stdout, "set \"AWS_ACCESS_KEY_ID={escaped_id}\"")?;
+                writeln!(stdout, "set \"AWS_SECRET_ACCESS_KEY={escaped_secret}\"")?;
+                writeln!(stdout, "set \"AWS_SESSION_TOKEN={escaped_token}\"")?;
             }
             Shell::PowerShell => {
                 let escaped_id = Self::escape_powershell_quotes(id);
@@ -76,18 +72,15 @@ impl Shell {
 
                 writeln!(
                     stdout,
-                    "Set-Variable -Name \"AWS_ACCESS_KEY_ID\" -Value \"{}\"",
-                    escaped_id
+                    "Set-Variable -Name \"AWS_ACCESS_KEY_ID\" -Value \"{escaped_id}\""
                 )?;
                 writeln!(
                     stdout,
-                    "Set-Variable -Name \"AWS_SECRET_ACCESS_KEY\" -Value \"{}\"",
-                    escaped_secret
+                    "Set-Variable -Name \"AWS_SECRET_ACCESS_KEY\" -Value \"{escaped_secret}\""
                 )?;
                 writeln!(
                     stdout,
-                    "Set-Variable -Name \"AWS_SESSION_TOKEN\" -Value \"{}\"",
-                    escaped_token
+                    "Set-Variable -Name \"AWS_SESSION_TOKEN\" -Value \"{escaped_token}\""
                 )?;
             }
         }

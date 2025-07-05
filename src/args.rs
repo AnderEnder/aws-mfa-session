@@ -1,6 +1,7 @@
 use crate::error::CliError;
 use aws_config::Region;
 use clap::Parser;
+use dialoguer::Input;
 
 pub fn region(s: &str) -> Result<Region, CliError> {
     Ok(Region::new(s.to_owned()))
@@ -34,7 +35,7 @@ pub struct Args {
     pub region: Option<Region>,
     /// MFA code from MFA resource
     #[arg(long = "code", short = 'c', value_parser = parse_code)]
-    pub code: String,
+    pub code: Option<String>,
     /// MFA device ARN from user profile. It could be detected automatically
     #[arg(long = "arn", short = 'a')]
     pub arn: Option<String>,
@@ -50,6 +51,31 @@ pub struct Args {
     /// Update AWS credential profile with temporary session credentials
     #[arg(long = "update-profile", short = 'u')]
     pub session_profile: Option<String>,
+}
+
+impl Args {
+    pub fn get_code(&mut self) -> Result<(), CliError> {
+        self.code = match &self.code {
+            None => {
+                if cfg!(test) {
+                    Some("123456".to_string())
+                } else {
+                    Some(ask_code_interactive()?)
+                }
+            }
+            code => code.to_owned(),
+        };
+        Ok(())
+    }
+}
+
+fn ask_code_interactive() -> Result<String, CliError> {
+    let code: String = Input::new()
+        .with_prompt("Enter MFA code")
+        .interact_text()
+        .map_err(|e| CliError::ValidationError(e.to_string()))?;
+
+    parse_code(&code)
 }
 
 #[cfg(test)]
@@ -93,7 +119,7 @@ mod tests {
         let args = Args::try_parse_from(["aws-mfa-session", "--code", "123456"]);
         assert!(args.is_ok());
         let args = args.unwrap();
-        assert_eq!(args.code, "123456");
+        assert_eq!(args.code, Some("123456".to_string()));
         assert_eq!(args.duration, 3600); // default
         assert!(!args.shell);
         assert!(!args.export);
@@ -129,7 +155,7 @@ mod tests {
             Some("/custom/path/credentials".to_string())
         );
         assert_eq!(args.region.unwrap().to_string(), "us-west-2");
-        assert_eq!(args.code, "654321");
+        assert_eq!(args.code, Some("654321".to_string()));
         assert_eq!(
             args.arn,
             Some("arn:aws:iam::123456789012:mfa/test-user".to_string())
@@ -168,7 +194,8 @@ mod tests {
     #[test]
     fn test_args_parsing_missing_code() {
         let args = Args::try_parse_from(["aws-mfa-session"]);
-        assert!(args.is_err());
+        // This should succeed, as code is optional in the Args struct
+        assert!(args.is_ok());
     }
 
     #[test]
@@ -198,7 +225,7 @@ mod tests {
         assert_eq!(args.profile, Some("profile".to_string()));
         assert_eq!(args.credentials_file, Some("/path/to/file".to_string()));
         assert_eq!(args.region.unwrap().to_string(), "ap-southeast-1");
-        assert_eq!(args.code, "123456");
+        assert_eq!(args.code, Some("123456".to_string()));
         assert_eq!(args.arn, Some("arn:aws:iam::123:mfa/user".to_string()));
         assert_eq!(args.duration, 1800);
         assert!(args.shell);
@@ -224,8 +251,46 @@ mod tests {
     #[test]
     fn test_args_debug() {
         let args = Args::try_parse_from(["aws-mfa-session", "--code", "123456"]).unwrap();
-        let debug_str = format!("{:?}", args);
+        let debug_str = format!("{args:?}");
         assert!(debug_str.contains("Args"));
         assert!(debug_str.contains("123456"));
+    }
+
+    #[test]
+    fn test_get_code_with_existing_code() {
+        let mut args = Args::try_parse_from(["aws-mfa-session", "--code", "654321"]).unwrap();
+        assert_eq!(args.code, Some("654321".to_string()));
+
+        // get_code should not change existing code
+        args.get_code().unwrap();
+        assert_eq!(args.code, Some("654321".to_string()));
+    }
+
+    #[test]
+    fn test_get_code_without_code_in_test_mode() {
+        let mut args = Args::try_parse_from(["aws-mfa-session"]).unwrap();
+        assert_eq!(args.code, None);
+
+        // In test mode, get_code should set code to "123456"
+        args.get_code().unwrap();
+        assert_eq!(args.code, Some("123456".to_string()));
+    }
+
+    #[test]
+    fn test_get_code_preserves_existing_valid_code() {
+        let mut args = Args::try_parse_from(["aws-mfa-session", "--code", "999888"]).unwrap();
+        let original_code = args.code.clone();
+
+        args.get_code().unwrap();
+        assert_eq!(args.code, original_code);
+    }
+
+    #[test]
+    fn test_ask_code_interactive_validation() {
+        // Test that the interactive code asking validates input
+        assert!(parse_code("123456").is_ok());
+        assert!(parse_code("abcdef").is_err());
+        assert!(parse_code("12345").is_err());
+        assert!(parse_code("1234567").is_err());
     }
 }

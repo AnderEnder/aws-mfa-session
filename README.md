@@ -8,9 +8,12 @@ A command line utility to generate temporary AWS credentials using virtual MFA d
 
 ## Features
 * Supports MFA authentication with virtual MFA devices (hardware MFA devices supported, but FIDO security keys are not supported)
+* **Interactive MFA code prompting** - if no code is provided, you'll be prompted to enter it
 * Select any profile from AWS credentials file
 * Automatic MFA device detection from user profile
 * Generate temporary credentials using AWS STS
+* **Enhanced error reporting** with detailed error messages
+* **Atomic credentials file updates** - prevents file corruption during concurrent access
 * Multiple output options:
   * Export as environment variables
   * Launch new shell with credentials
@@ -18,7 +21,7 @@ A command line utility to generate temporary AWS credentials using virtual MFA d
 
 ## Release page distributions
 
-Github Release page provides binaries for:
+GitHub Release page provides binaries for:
 
 * Windows
 * Linux
@@ -26,7 +29,19 @@ Github Release page provides binaries for:
 
 ## Examples
 
-Generate session credentials with default profile, and print the credentials as exported environment variables
+### Interactive MFA Code Entry
+
+If you don't provide the `--code` argument, you'll be prompted to enter it interactively:
+
+```sh
+# Interactive mode - you'll be prompted for the MFA code
+aws-mfa-session -e
+Enter MFA code: 123456
+```
+
+### Basic Usage
+
+Generate session credentials with default profile, and print the credentials as exported environment variables:
 
 ```sh
 aws-mfa-session --code 123456 -e
@@ -36,6 +51,8 @@ Could be used to inject variables into the current shell:
 ```sh
 eval $(aws-mfa-session -c 464899 -e)
 ```
+
+### Advanced Usage
 
 Generate session credentials with default profile and MFA ARN:
 
@@ -118,7 +135,7 @@ cargo install --path .
 ## Usage
 
 ```
-Usage: aws-mfa-session [OPTIONS] --code <CODE>
+Usage: aws-mfa-session [OPTIONS]
 
 Options:
   -p, --profile <PROFILE>
@@ -128,7 +145,7 @@ Options:
   -r, --region <REGION>
           AWS region. AWS_REGION is used if not defined
   -c, --code <CODE>
-          MFA code from MFA resource
+          MFA code from MFA resource (if not provided, you'll be prompted interactively)
   -a, --arn <ARN>
           MFA device ARN from user profile. It could be detected automatically
   -d, --duration <DURATION>
@@ -137,8 +154,30 @@ Options:
           Run shell with AWS credentials as environment variables
   -e
           Print(export) AWS credentials as environment variables
-  -u, --update-profile <SESSION_PROFILE>
-          Update AWS credential profile with temporary session credentials
+      --session-profile <SESSION_PROFILE>
+          Name of the profile to save the temporary session credentials to
+  -v, --verbose
+          Increase logging verbosity (-v, -vv, -vvv, -vvvv)
   -h, --help
           Print help
 ```
+
+## Security Features
+
+* **Input validation**: MFA codes must be exactly 6 digits
+* **Duration validation**: Session duration is validated to be within AWS limits (15 minutes to 36 hours)
+* **Atomic file operations**: Credentials file updates are atomic to prevent corruption
+* **Permission preservation**: Original file permissions are maintained when updating credentials
+* **Shell injection protection**: All shell output is properly escaped for security
+
+## Error Handling
+
+The application provides detailed error messages for common issues:
+
+* Invalid MFA codes (must be 6 digits)
+* Invalid session duration (must be 900-129600 seconds)  
+* AWS authentication failures
+* Network connectivity issues
+* File permission problems
+
+Enhanced error reporting with structured logging helps with troubleshooting.

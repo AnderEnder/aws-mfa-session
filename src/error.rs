@@ -4,8 +4,9 @@ use aws_sdk_iam::{error::SdkError, operation::list_mfa_devices::ListMFADevicesEr
 use aws_sdk_sts::operation::{
     get_caller_identity::GetCallerIdentityError, get_session_token::GetSessionTokenError,
 };
+use miette::Diagnostic;
 
-#[derive(Debug)]
+#[derive(Debug, Diagnostic)]
 pub enum CliError {
     ValidationError(String),
     NoMFA,
@@ -21,15 +22,15 @@ pub enum CliError {
 impl std::fmt::Display for CliError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            CliError::ValidationError(e) => write!(f, "Validation error: {}", e),
+            CliError::ValidationError(e) => write!(f, "Validation error: {e}"),
             CliError::NoMFA => write!(f, "No MFA device in user profile"),
             CliError::NoCredentials => write!(f, "No returned credentials"),
             CliError::NoAccount => write!(f, "No returned account"),
-            CliError::ListMFADevicesError(e) => write!(f, "No mfa devices: {:?}", e),
-            CliError::GetSessionTokenError(e) => write!(f, "Cannot receive token: {:?}", e),
-            CliError::GetCallerIdentityError(e) => write!(f, "Error: {:?}", e),
-            CliError::SdkError(e) => write!(f, "SDKError: {:?}", e),
-            CliError::IoError(e) => write!(f, "IOError: {:?}", e),
+            CliError::ListMFADevicesError(e) => write!(f, "No mfa devices: {e:?}"),
+            CliError::GetSessionTokenError(e) => write!(f, "Cannot receive token: {e:?}"),
+            CliError::GetCallerIdentityError(e) => write!(f, "Error: {e:?}"),
+            CliError::SdkError(e) => write!(f, "SDKError: {e:?}"),
+            CliError::IoError(e) => write!(f, "IOError: {e:?}"),
         }
     }
 }
@@ -45,11 +46,11 @@ impl From<std::io::Error> for CliError {
 impl<E: Display + Debug> From<SdkError<E>> for CliError {
     fn from(e: SdkError<E>) -> Self {
         match e {
-            SdkError::ConstructionFailure(e) => Self::SdkError(format!("{:?}", e)),
-            SdkError::TimeoutError(e) => Self::SdkError(format!("{:?}", e)),
-            SdkError::DispatchFailure(e) => Self::SdkError(format!("{:?}", e)),
-            SdkError::ResponseError(e) => Self::SdkError(format!("{:?}", e)),
-            SdkError::ServiceError(e) => Self::SdkError(format!("{:?}", e)),
+            SdkError::ConstructionFailure(e) => Self::SdkError(format!("{e:?}")),
+            SdkError::TimeoutError(e) => Self::SdkError(format!("{e:?}")),
+            SdkError::DispatchFailure(e) => Self::SdkError(format!("{e:?}")),
+            SdkError::ResponseError(e) => Self::SdkError(format!("{e:?}")),
+            SdkError::ServiceError(e) => Self::SdkError(format!("{e:?}")),
             _ => Self::SdkError("Unknown SDK error".to_string()),
         }
     }
