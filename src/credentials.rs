@@ -363,4 +363,110 @@ aws_secret_access_key = SEC123RET/NEW
 "##
         );
     }
+
+    #[test]
+    fn test_profile_with_session_token() {
+        let profile = Profile {
+            name: String::from("test-session"),
+            access_key_id: String::from("AKIATEST"),
+            secret_access_key: String::from("secret123"),
+            session_token: Some(String::from("token456")),
+            region: Some(String::from("us-west-2")),
+        };
+
+        let config_section = profile.config_section();
+        assert!(config_section.contains("aws_access_key_id = AKIATEST"));
+        assert!(config_section.contains("aws_secret_access_key = secret123"));
+        assert!(config_section.contains("aws_session_token = token456"));
+        assert!(config_section.contains("region = us-west-2"));
+    }
+
+    #[test]
+    fn test_profile_without_optional_fields() {
+        let profile = Profile {
+            name: String::from("minimal-profile"),
+            access_key_id: String::from("AKIATEST"),
+            secret_access_key: String::from("secret123"),
+            session_token: None,
+            region: None,
+        };
+
+        let config_section = profile.config_section();
+        assert!(config_section.contains("aws_access_key_id = AKIATEST"));
+        assert!(config_section.contains("aws_secret_access_key = secret123"));
+        assert!(!config_section.contains("aws_session_token"));
+        assert!(!config_section.contains("region"));
+    }
+
+    #[test]
+    fn test_update_profile_with_special_characters() {
+        let profile = Profile {
+            name: String::from("special-chars"),
+            access_key_id: String::from("AKIA/TEST+KEY="),
+            secret_access_key: String::from("secret/with+special=chars"),
+            session_token: Some(String::from("token/with+special=chars")),
+            region: Some(String::from("us-east-1")),
+        };
+
+        let updated = update_profile("", &profile);
+        assert!(updated.contains("AKIA/TEST+KEY="));
+        assert!(updated.contains("secret/with+special=chars"));
+        assert!(updated.contains("token/with+special=chars"));
+    }
+
+    #[test]
+    fn test_update_profile_empty_values() {
+        let profile = Profile {
+            name: String::from("empty-test"),
+            access_key_id: String::from(""),
+            secret_access_key: String::from(""),
+            session_token: Some(String::from("")),
+            region: Some(String::from("")),
+        };
+
+        let updated = update_profile("", &profile);
+        assert!(updated.contains("[empty-test]"));
+        assert!(updated.contains("aws_access_key_id = "));
+        assert!(updated.contains("aws_secret_access_key = "));
+        assert!(updated.contains("aws_session_token = "));
+        assert!(updated.contains("region = "));
+    }
+
+    #[test]
+    fn test_credential_file_env_var() {
+        use std::env;
+
+        // Save original value
+        let original = env::var("AWS_SHARED_CREDENTIALS_FILE").ok();
+
+        // Test with custom path
+        // SAFETY: Setting test environment variable in isolated test context
+        unsafe {
+            env::set_var("AWS_SHARED_CREDENTIALS_FILE", "/custom/path/credentials");
+        }
+        let file = credential_file().unwrap();
+        assert_eq!(file.to_str().unwrap(), "/custom/path/credentials");
+
+        // Restore original value
+        // SAFETY: Restoring environment variable in isolated test context
+        unsafe {
+            match original {
+                Some(val) => env::set_var("AWS_SHARED_CREDENTIALS_FILE", val),
+                None => env::remove_var("AWS_SHARED_CREDENTIALS_FILE"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_config_section_header() {
+        let profile = Profile {
+            name: String::from("test-profile"),
+            access_key_id: String::from("key"),
+            secret_access_key: String::from("secret"),
+            session_token: None,
+            region: None,
+        };
+
+        assert_eq!(profile.config_section_header(), "[test-profile]");
+    }
 }
