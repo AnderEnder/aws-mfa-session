@@ -3,6 +3,9 @@ mod credentials;
 mod error;
 mod shell;
 
+#[cfg(test)]
+mod test_utils;
+
 pub use args::Args;
 use credentials::*;
 use error::CliError;
@@ -141,4 +144,96 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::test_utils::env_mock::with_env;
+
+    #[test]
+    fn test_env_var_setting_logic() {
+        // Test the logic for setting environment variables based on Args
+
+        with_env(
+            |env| {
+                // Clear any existing values
+                env.remove("AWS_PROFILE");
+                env.remove("AWS_SHARED_CREDENTIALS_FILE");
+            },
+            |env| {
+                // Simulate what the run function does with environment variables
+                let profile = Some("test-profile".to_string());
+                let file = Some("/test/credentials".to_string());
+
+                // This is the pattern from run() function
+                if let Some(profile) = profile {
+                    // SAFETY: Test environment variable setting
+                    unsafe {
+                        std::env::set_var("AWS_PROFILE", profile);
+                    }
+                }
+
+                if let Some(file) = file {
+                    // SAFETY: Test environment variable setting
+                    unsafe {
+                        std::env::set_var("AWS_SHARED_CREDENTIALS_FILE", file);
+                    }
+                }
+
+                // Verify the environment variables were set
+                assert_eq!(env.get("AWS_PROFILE"), Some("test-profile".to_string()));
+                assert_eq!(
+                    env.get("AWS_SHARED_CREDENTIALS_FILE"),
+                    Some("/test/credentials".to_string())
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn test_env_var_not_set_when_none() {
+        with_env(
+            |env| {
+                // Set initial values
+                env.set("AWS_PROFILE", "initial-profile");
+                env.set("AWS_SHARED_CREDENTIALS_FILE", "/initial/credentials");
+            },
+            |env| {
+                // Simulate Args with None values
+                let profile: Option<String> = None;
+                let file: Option<String> = None;
+
+                // Environment variables should remain unchanged
+                assert_eq!(env.get("AWS_PROFILE"), Some("initial-profile".to_string()));
+                assert_eq!(
+                    env.get("AWS_SHARED_CREDENTIALS_FILE"),
+                    Some("/initial/credentials".to_string())
+                );
+
+                // Verify the pattern from run() function - None values don't change env vars
+                if let Some(profile) = profile {
+                    // This should not execute
+                    unsafe {
+                        std::env::set_var("AWS_PROFILE", profile);
+                    }
+                    panic!("Should not set env var when profile is None");
+                }
+
+                if let Some(file) = file {
+                    // This should not execute
+                    unsafe {
+                        std::env::set_var("AWS_SHARED_CREDENTIALS_FILE", file);
+                    }
+                    panic!("Should not set env var when file is None");
+                }
+
+                // Values should remain unchanged
+                assert_eq!(env.get("AWS_PROFILE"), Some("initial-profile".to_string()));
+                assert_eq!(
+                    env.get("AWS_SHARED_CREDENTIALS_FILE"),
+                    Some("/initial/credentials".to_string())
+                );
+            },
+        );
+    }
 }

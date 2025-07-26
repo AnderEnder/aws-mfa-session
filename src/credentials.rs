@@ -434,27 +434,33 @@ aws_secret_access_key = SEC123RET/NEW
 
     #[test]
     fn test_credential_file_env_var() {
-        use std::env;
+        use crate::test_utils::env_mock::with_env;
 
-        // Save original value
-        let original = env::var("AWS_SHARED_CREDENTIALS_FILE").ok();
+        with_env(
+            |env| {
+                env.set("AWS_SHARED_CREDENTIALS_FILE", "/custom/path/credentials");
+            },
+            |_env| {
+                let file = credential_file().unwrap();
+                assert_eq!(file.to_str().unwrap(), "/custom/path/credentials");
+            },
+        );
+    }
 
-        // Test with custom path
-        // SAFETY: Setting test environment variable in isolated test context
-        unsafe {
-            env::set_var("AWS_SHARED_CREDENTIALS_FILE", "/custom/path/credentials");
-        }
-        let file = credential_file().unwrap();
-        assert_eq!(file.to_str().unwrap(), "/custom/path/credentials");
+    #[test]
+    fn test_credential_file_no_env_var() {
+        use crate::test_utils::env_mock::with_env;
 
-        // Restore original value
-        // SAFETY: Restoring environment variable in isolated test context
-        unsafe {
-            match original {
-                Some(val) => env::set_var("AWS_SHARED_CREDENTIALS_FILE", val),
-                None => env::remove_var("AWS_SHARED_CREDENTIALS_FILE"),
-            }
-        }
+        with_env(
+            |env| {
+                env.remove("AWS_SHARED_CREDENTIALS_FILE");
+            },
+            |_env| {
+                let file = credential_file().unwrap();
+                // Should default to ~/.aws/credentials
+                assert!(file.to_string_lossy().ends_with(".aws/credentials"));
+            },
+        );
     }
 
     #[test]
