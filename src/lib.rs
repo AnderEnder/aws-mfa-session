@@ -73,7 +73,10 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
     let credentials = sts_client
         .get_session_token()
         .set_serial_number(Some(serial_number))
-        .token_code(opts.code)
+        .token_code(
+            opts.code
+                .expect("MFA code should be available after get_code() call"),
+        )
         .duration_seconds(opts.duration)
         .send()
         .await?
