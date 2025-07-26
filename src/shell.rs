@@ -60,15 +60,18 @@ impl Shell {
                 let escaped_id = Self::escape_cmd_quotes(id);
                 let escaped_secret = Self::escape_cmd_quotes(secret);
                 let escaped_token = Self::escape_cmd_quotes(token);
+                let escaped_ps = Self::escape_cmd_quotes(ps);
 
                 writeln!(stdout, "set \"AWS_ACCESS_KEY_ID={escaped_id}\"")?;
                 writeln!(stdout, "set \"AWS_SECRET_ACCESS_KEY={escaped_secret}\"")?;
                 writeln!(stdout, "set \"AWS_SESSION_TOKEN={escaped_token}\"")?;
+                writeln!(stdout, "set \"PROMPT={escaped_ps}\"")?;
             }
             Shell::PowerShell => {
                 let escaped_id = Self::escape_powershell_quotes(id);
                 let escaped_secret = Self::escape_powershell_quotes(secret);
                 let escaped_token = Self::escape_powershell_quotes(token);
+                let escaped_ps = Self::escape_powershell_quotes(ps);
 
                 writeln!(
                     stdout,
@@ -82,6 +85,7 @@ impl Shell {
                     stdout,
                     "Set-Variable -Name \"AWS_SESSION_TOKEN\" -Value \"{escaped_token}\""
                 )?;
+                writeln!(stdout, "function prompt {{ \"{escaped_ps}\" }}")?;
             }
         }
         Ok(())
@@ -236,7 +240,7 @@ mod tests {
         assert!(output_str.contains("set \"AWS_ACCESS_KEY_ID=test_key\""));
         assert!(output_str.contains("set \"AWS_SECRET_ACCESS_KEY=test_secret\""));
         assert!(output_str.contains("set \"AWS_SESSION_TOKEN=test_token\""));
-        assert!(!output_str.contains("PS1"));
+        assert!(output_str.contains("set \"PROMPT=test_prompt\""));
     }
 
     #[test]
@@ -265,7 +269,7 @@ mod tests {
         assert!(
             output_str.contains("Set-Variable -Name \"AWS_SESSION_TOKEN\" -Value \"test_token\"")
         );
-        assert!(!output_str.contains("PS1"));
+        assert!(output_str.contains("function prompt { \"test_prompt\" }"));
     }
 
     #[test]
@@ -324,8 +328,10 @@ mod tests {
 
     #[test]
     fn test_case_sensitivity() {
-        assert_eq!(Shell::from("/BIN/BASH"), Shell::Bash);
-        assert_ne!(Shell::from("/USR/BIN/ZSH"), Shell::Zsh);
+        // Unix paths are case sensitive, so uppercase should default to Bash
+        assert_eq!(Shell::from("/BIN/BASH"), Shell::Bash); // defaults to Bash
+        assert_eq!(Shell::from("/USR/BIN/ZSH"), Shell::Bash); // defaults to Bash  
+        // Windows paths are case insensitive
         assert_eq!(Shell::from("CMD.EXE"), Shell::Cmd);
         assert_eq!(Shell::from("POWERSHELL.EXE"), Shell::PowerShell);
     }
@@ -413,8 +419,10 @@ mod tests {
 
     #[test]
     fn test_shell_from_mixed_case() {
-        assert_eq!(Shell::from("/Usr/Bin/Bash"), Shell::Bash);
-        assert_ne!(Shell::from("/USR/LOCAl/BIN/ZSH"), Shell::Zsh);
+        // Unix paths are case sensitive, so mixed case defaults to Bash
+        assert_eq!(Shell::from("/Usr/Bin/Bash"), Shell::Bash); // defaults to Bash
+        assert_eq!(Shell::from("/USR/LOCAl/BIN/ZSH"), Shell::Bash); // defaults to Bash
+        // Windows executables are case insensitive
         assert_eq!(Shell::from("Powershell.Exe"), Shell::PowerShell);
         assert_eq!(Shell::from("PWSH.EXE"), Shell::PowerShell);
     }

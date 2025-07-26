@@ -43,10 +43,10 @@ pub struct Args {
     #[arg(long = "duration", short = 'd', default_value_t = 3600, value_parser = clap::value_parser!(i32).range(900..129600))]
     pub duration: i32,
     /// Run shell with AWS credentials as environment variables
-    #[arg(short = 's')]
+    #[arg(long = "shell", short = 's')]
     pub shell: bool,
     /// Print(export) AWS credentials as environment variables
-    #[arg(short = 'e')]
+    #[arg(long = "export", short = 'e')]
     pub export: bool,
     /// Update AWS credential profile with temporary session credentials
     #[arg(long = "update-profile", short = 'u')]

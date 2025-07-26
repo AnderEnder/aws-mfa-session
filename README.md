@@ -35,7 +35,7 @@ If you don't provide the `--code` argument, you'll be prompted to enter it inter
 
 ```sh
 # Interactive mode - you'll be prompted for the MFA code
-aws-mfa-session -e
+aws-mfa-session --export
 Enter MFA code: 123456
 ```
 
@@ -44,12 +44,12 @@ Enter MFA code: 123456
 Generate session credentials with default profile, and print the credentials as exported environment variables:
 
 ```sh
-aws-mfa-session --code 123456 -e
+aws-mfa-session --code 123456 --export
 ```
 
 Could be used to inject variables into the current shell:
 ```sh
-eval $(aws-mfa-session -c 464899 -e)
+eval $(aws-mfa-session --code 464899 --export)
 ```
 
 ### Advanced Usage
@@ -57,19 +57,19 @@ eval $(aws-mfa-session -c 464899 -e)
 Generate session credentials with default profile and MFA ARN:
 
 ```sh
-aws-mfa-session --arn arn:aws:iam::012345678910:mfa/username --code 123456 -e
+aws-mfa-session --arn arn:aws:iam::012345678910:mfa/username --code 123456 --export
 ```
 
 Generate session credentials with default profile and non-default region:
 
 ```sh
-aws-mfa-session --region us-east-2 --code 123456 -e
+aws-mfa-session --region us-east-2 --code 123456 --export
 ```
 
 Generate session credentials with default profile, and run a new shell with exported environment variables:
 
 ```sh
-aws-mfa-session --code 123456 -s
+aws-mfa-session --code 123456 --shell
 ```
 
 Generate session credentials with default profile, and create or update a new profile:
@@ -93,13 +93,49 @@ aws-mfa-session --credentials-file ~/.aws/credentials2 --profile dev --update-pr
 Generate session credentials with custom duration (2 hours):
 
 ```sh
-aws-mfa-session --code 123456 --duration 7200 -e
+aws-mfa-session --code 123456 --duration 7200 --export
 ```
 
-Generate session credentials with maximum duration (36 hours):
+Generate session credentials with maximum duration (just under 36 hours):
 
 ```sh
-aws-mfa-session --code 123456 --duration 129600 -e
+aws-mfa-session --code 123456 --duration 129599 --export
+```
+
+### Shell-Specific Output Examples
+
+The tool automatically detects your shell and formats output appropriately:
+
+**Bash/Zsh/Sh output:**
+```sh
+export AWS_ACCESS_KEY_ID='AKIAIOSFODNN7EXAMPLE'
+export AWS_SECRET_ACCESS_KEY='wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'
+export AWS_SESSION_TOKEN='AQoEXAMPLE...'
+export PS1='AWS:user@123456789012 \$ '
+```
+
+**Fish shell output:**
+```fish
+set -x AWS_ACCESS_KEY_ID "AKIAIOSFODNN7EXAMPLE"
+set -x AWS_SECRET_ACCESS_KEY "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+set -x AWS_SESSION_TOKEN "AQoEXAMPLE..."
+set -x PS1 "AWS:user@123456789012 \$ "
+```
+
+**CMD output:**
+```cmd
+set "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"
+set "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+set "AWS_SESSION_TOKEN=AQoEXAMPLE..."
+set "PROMPT=AWS:user@123456789012 \$ "
+```
+
+**PowerShell output:**
+```powershell
+Set-Variable -Name "AWS_ACCESS_KEY_ID" -Value "AKIAIOSFODNN7EXAMPLE"
+Set-Variable -Name "AWS_SECRET_ACCESS_KEY" -Value "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+Set-Variable -Name "AWS_SESSION_TOKEN" -Value "AQoEXAMPLE..."
+function prompt { "AWS:user@123456789012 \$ " }
 ```
 
 ## Installation
@@ -140,24 +176,22 @@ Usage: aws-mfa-session [OPTIONS]
 Options:
   -p, --profile <PROFILE>
           AWS credential profile to use. AWS_PROFILE is used by default
-  -f, --credentials-file <FILE>
+  -f, --credentials-file <CREDENTIALS_FILE>
           AWS credentials file location to use. AWS_SHARED_CREDENTIALS_FILE is used if not defined
   -r, --region <REGION>
           AWS region. AWS_REGION is used if not defined
   -c, --code <CODE>
-          MFA code from MFA resource (if not provided, you'll be prompted interactively)
+          MFA code from MFA resource
   -a, --arn <ARN>
           MFA device ARN from user profile. It could be detected automatically
   -d, --duration <DURATION>
           Session duration in seconds (900-129600) [default: 3600]
-  -s
+  -s, --shell
           Run shell with AWS credentials as environment variables
-  -e
+  -e, --export
           Print(export) AWS credentials as environment variables
-      --session-profile <SESSION_PROFILE>
-          Name of the profile to save the temporary session credentials to
-  -v, --verbose
-          Increase logging verbosity (-v, -vv, -vvv, -vvvv)
+  -u, --update-profile <SESSION_PROFILE>
+          Update AWS credential profile with temporary session credentials
   -h, --help
           Print help
 ```
@@ -169,15 +203,28 @@ Options:
 * **Atomic file operations**: Credentials file updates are atomic to prevent corruption
 * **Permission preservation**: Original file permissions are maintained when updating credentials
 * **Shell injection protection**: All shell output is properly escaped for security
+* **Multi-shell support**: Supports Bash, Zsh, Fish, Sh, CMD, and PowerShell with proper prompt setting
+
+## Shell Support
+
+The application automatically detects your shell and formats output accordingly:
+
+* **Unix/Linux shells**: Bash, Zsh, Sh, Fish
+  - Sets `AWS_*` environment variables and `PS1` prompt
+  - Proper quote escaping for special characters
+* **Windows shells**: CMD, PowerShell
+  - CMD: Uses `set` commands and `PROMPT` variable
+  - PowerShell: Uses `Set-Variable` and custom `prompt` function
+  - Case-insensitive shell detection
 
 ## Error Handling
 
-The application provides detailed error messages for common issues:
+The application provides detailed error messages with enhanced reporting using `miette`:
 
-* Invalid MFA codes (must be 6 digits)
-* Invalid session duration (must be 900-129600 seconds)  
-* AWS authentication failures
-* Network connectivity issues
-* File permission problems
+* **Input validation errors**: Invalid MFA codes, duration out of bounds
+* **AWS service errors**: Authentication failures, missing MFA devices, STS token errors
+* **File operation errors**: Permission issues, file corruption prevention
+* **Network errors**: Connectivity issues, timeout handling
+* **Interactive errors**: TTY detection for MFA code prompting
 
-Enhanced error reporting with structured logging helps with troubleshooting.
+All errors include helpful context and suggestions for resolution.

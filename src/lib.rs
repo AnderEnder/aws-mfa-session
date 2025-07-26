@@ -31,12 +31,16 @@ const AWS_SHARED_CREDENTIALS_FILE: &str = "AWS_SHARED_CREDENTIALS_FILE";
 pub async fn run(opts: Args) -> Result<(), CliError> {
     // ProfileProvider is limited, but AWS_PROFILE is used elsewhere
     if let Some(profile) = opts.profile {
+        // SAFETY: Setting AWS_PROFILE environment variable is safe in this single-threaded context
+        // and doesn't interfere with other parts of the application
         unsafe {
             env::set_var(AWS_PROFILE, profile);
         }
     }
 
     if let Some(file) = opts.credentials_file {
+        // SAFETY: Setting AWS_SHARED_CREDENTIALS_FILE environment variable is safe in this
+        // single-threaded context and doesn't interfere with other parts of the application
         unsafe {
             env::set_var(AWS_SHARED_CREDENTIALS_FILE, file);
         }
