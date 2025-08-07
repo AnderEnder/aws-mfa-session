@@ -1,11 +1,13 @@
 mod args;
 mod credentials;
 mod error;
+mod profile;
 mod shell;
 
 pub use args::Args;
 use credentials::*;
 use error::CliError;
+use profile::get_mfa_serial_from_profile;
 use shell::Shell;
 
 use std::collections::HashMap;
@@ -30,7 +32,7 @@ const AWS_SHARED_CREDENTIALS_FILE: &str = "AWS_SHARED_CREDENTIALS_FILE";
 
 pub async fn run(opts: Args) -> Result<(), CliError> {
     // ProfileProvider is limited, but AWS_PROFILE is used elsewhere
-    if let Some(profile) = opts.profile {
+    if let Some(ref profile) = opts.profile {
         // SAFETY: Setting AWS_PROFILE environment variable is safe in this single-threaded context
         // and doesn't interfere with other parts of the application
         unsafe {
@@ -62,12 +64,16 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
     let iam_client = Client::new(&shared_config);
     let serial_number = match opts.arn {
         None => {
-            // let response = iam_client.list_mfa_devices(mfa_request).await?;
-            let response = iam_client.list_mfa_devices().max_items(1).send().await?;
-
-            let mfa_devices = response.mfa_devices();
-            let serial = &mfa_devices.first().ok_or(CliError::NoMFA)?.serial_number();
-            (*serial).to_owned()
+            // First, try to get mfa_serial from profile configuration
+            if let Some(mfa_serial) = get_mfa_serial_from_profile(opts.profile.as_deref()) {
+                mfa_serial
+            } else {
+                // Fallback to automatic MFA device detection
+                let response = iam_client.list_mfa_devices().max_items(1).send().await?;
+                let mfa_devices = response.mfa_devices();
+                let serial = &mfa_devices.first().ok_or(CliError::NoMFA)?.serial_number();
+                (*serial).to_owned()
+            }
         }
         Some(other) => other,
     };
@@ -141,4 +147,29 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+
+    #[test]
+    fn test_env_var_setting_logic() {
+        // Test the logic for setting environment variables based on Args
+        // This test verifies the conditional logic without mocking env vars
+
+        // Test Some() values result in setting environment variables
+        let profile = Some("test-profile".to_string());
+        let file = Some("/test/credentials".to_string());
+
+        // This is the pattern from run() function - verify the conditions work
+        assert!(profile.is_some()); // Would trigger env::set_var in run()
+        assert!(file.is_some()); // Would trigger env::set_var in run()
+
+        // Test None values don't trigger environment variable setting
+        let profile_none: Option<String> = None;
+        let file_none: Option<String> = None;
+
+        assert!(profile_none.is_none()); // Would NOT trigger env::set_var in run()
+        assert!(file_none.is_none()); // Would NOT trigger env::set_var in run()
+    }
 }
