@@ -15,6 +15,17 @@ jobs:
         os: [ubuntu-latest, macOS-latest, windows-latest, macOS-13, windows-11-arm, ubuntu-24.04-arm]
     steps:
       - uses: actions/checkout@v4
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - uses: dtolnay/rust-toolchain@stable
       - name: build
         run: cargo build --verbose
