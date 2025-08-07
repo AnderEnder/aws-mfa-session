@@ -1,3 +1,5 @@
+use ini::Ini;
+
 /// Read MFA serial from AWS profile configuration using INI parsing
 pub fn get_mfa_serial_from_profile(profile_name: Option<&str>) -> Option<String> {
     let profile_name = profile_name.unwrap_or("default");
@@ -45,8 +47,6 @@ pub fn get_mfa_serial_from_profile(profile_name: Option<&str>) -> Option<String>
 
 /// Extract MFA serial from AWS config file using proper INI parsing
 fn extract_mfa_serial_with_ini(file_path: &str, target_profile: &str) -> Option<String> {
-    use ini::Ini;
-
     let conf = Ini::load_from_file(file_path).ok()?;
 
     // Try both AWS config file formats:
@@ -116,5 +116,26 @@ mfa_serial = GAHT12345678
             Some("arn:aws:iam::123456789012:mfa/dev-user".to_string())
         );
         assert_eq!(prod_mfa, Some("GAHT12345678".to_string()));
+    }
+
+    #[test]
+    fn test_extract_mfa_serial_with_ini_none() {
+        // Create a temporary file with INI content that does NOT contain mfa_serial for the target profile
+        let content = r#"
+[profile dev]
+region = us-west-2
+
+[prod]
+region = us-east-1
+"#;
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(content.as_bytes()).unwrap();
+        let temp_path = temp_file.path().to_str().unwrap();
+
+        // Should return None for missing mfa_serial
+        let dev_mfa = extract_mfa_serial_with_ini(temp_path, "dev");
+        let prod_mfa = extract_mfa_serial_with_ini(temp_path, "prod");
+        assert_eq!(dev_mfa, None);
+        assert_eq!(prod_mfa, None);
     }
 }
