@@ -7,7 +7,7 @@ mod shell;
 pub use args::Args;
 use credentials::*;
 use error::CliError;
-use profile::get_mfa_serial_from_profile;
+pub use profile::get_mfa_serial_from_profile;
 use shell::Shell;
 
 use std::collections::HashMap;
