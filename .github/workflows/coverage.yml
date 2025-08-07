@@ -22,13 +22,11 @@ jobs:
           ~/.cargo/git
           target
         key: coverage-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - uses: cargo-bins/cargo-binstall@main
+    - name: Install cargo-tarpaulin
+      run: cargo binstall cargo-tarpaulin
     - name: Run coverage
-      run: |
-        docker run \
-          --security-opt seccomp=unconfined \
-          -v "$(pwd):/volume" \
-          xd009642/tarpaulin:latest \
-          cargo tarpaulin -f -t 5 --out Xml -v -- --test-threads=1 || true
+      run: cargo tarpaulin -f -t 5 --out Xml -v -- --test-threads=1 || true
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v5
       with:
