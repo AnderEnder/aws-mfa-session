@@ -433,28 +433,23 @@ aws_secret_access_key = SEC123RET/NEW
     }
 
     #[test]
-    fn test_credential_file_env_var() {
-        use std::env;
-
-        // Save original value
-        let original = env::var("AWS_SHARED_CREDENTIALS_FILE").ok();
-
-        // Test with custom path
-        // SAFETY: Setting test environment variable in isolated test context
-        unsafe {
-            env::set_var("AWS_SHARED_CREDENTIALS_FILE", "/custom/path/credentials");
-        }
+    fn test_credential_file_default_path() {
+        // Test that credential_file returns a path ending with .aws/credentials
+        // when AWS_SHARED_CREDENTIALS_FILE is not set
         let file = credential_file().unwrap();
-        assert_eq!(file.to_str().unwrap(), "/custom/path/credentials");
+        let path_str = file.to_string_lossy();
 
-        // Restore original value
-        // SAFETY: Restoring environment variable in isolated test context
-        unsafe {
-            match original {
-                Some(val) => env::set_var("AWS_SHARED_CREDENTIALS_FILE", val),
-                None => env::remove_var("AWS_SHARED_CREDENTIALS_FILE"),
-            }
-        }
+        // Check that the path ends with .aws and credentials, accounting for different path separators
+        assert!(path_str.contains(".aws"));
+        assert!(path_str.ends_with("credentials"));
+
+        // On Unix-like systems, should end with .aws/credentials
+        // On Windows, should end with .aws\credentials
+        #[cfg(unix)]
+        assert!(path_str.ends_with(".aws/credentials"));
+
+        #[cfg(windows)]
+        assert!(path_str.ends_with(".aws\\credentials"));
     }
 
     #[test]

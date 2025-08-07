@@ -10,7 +10,7 @@ A command line utility to generate temporary AWS credentials using virtual MFA d
 * Supports MFA authentication with virtual MFA devices (hardware MFA devices supported, but FIDO security keys are not supported)
 * **Interactive MFA code prompting** - if no code is provided, you'll be prompted to enter it
 * Select any profile from AWS credentials file
-* Automatic MFA device detection from user profile
+* **Automatic MFA device selection** - reads `mfa_serial` from AWS profile configuration (~/.aws/config or ~/.aws/credentials), with fallback to automatic device detection
 * Generate temporary credentials using AWS STS
 * **Enhanced error reporting** with detailed error messages
 * **Atomic credentials file updates** - prevents file corruption during concurrent access
@@ -27,6 +27,44 @@ GitHub Release page provides binaries for:
 * Linux
 * macOS
 
+## Configuration
+
+### MFA Device Configuration
+
+The tool can automatically select your MFA device by reading the `mfa_serial` setting from your AWS profile configuration. This eliminates the need to specify the `--arn` parameter each time.
+
+#### Adding mfa_serial to ~/.aws/config (Recommended)
+
+```ini
+[profile dev]
+region = us-west-2
+mfa_serial = arn:aws:iam::123456789012:mfa/username
+
+[profile prod]
+region = eu-west-1
+mfa_serial = arn:aws:iam::123456789012:mfa/prod-user
+```
+
+#### Adding mfa_serial to ~/.aws/credentials (Alternative)
+
+```ini
+[default]
+aws_access_key_id = AKIAIOSFODNN7EXAMPLE
+aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+mfa_serial = arn:aws:iam::123456789012:mfa/username
+
+[dev]
+aws_access_key_id = AKIAI44QH8DHBEXAMPLE
+aws_secret_access_key = je7MtGbClwBF/2Zp9Utk/h3yCo8nvbEXAMPLEKEY
+mfa_serial = GAHT12345678
+```
+
+**Supported mfa_serial formats:**
+- Virtual MFA devices: `arn:aws:iam::123456789012:mfa/username`
+- Hardware MFA devices: `GAHT12345678` (serial number)
+
+**Precedence:** Config file (~/.aws/config) takes precedence over credentials file (~/.aws/credentials).
+
 ## Examples
 
 ### Interactive MFA Code Entry
@@ -37,6 +75,18 @@ If you don't provide the `--code` argument, you'll be prompted to enter it inter
 # Interactive mode - you'll be prompted for the MFA code
 aws-mfa-session --export
 Enter MFA code: 123456
+```
+
+### Automatic MFA Device Selection
+
+When you have `mfa_serial` configured in your AWS profile, the tool automatically selects the MFA device:
+
+```sh
+# Uses mfa_serial from the default profile configuration
+aws-mfa-session --code 123456 --export
+
+# Uses mfa_serial from the dev profile configuration  
+aws-mfa-session --profile dev --code 123456 --export
 ```
 
 ### Basic Usage

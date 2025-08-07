@@ -36,7 +36,7 @@ pub struct Args {
     /// MFA code from MFA resource
     #[arg(long = "code", short = 'c', value_parser = parse_code)]
     pub code: Option<String>,
-    /// MFA device ARN from user profile. It could be detected automatically
+    /// MFA device ARN. If not provided, will try to read mfa_serial from AWS profile configuration, then fall back to automatic detection
     #[arg(long = "arn", short = 'a')]
     pub arn: Option<String>,
     /// Session duration in seconds (900-129600)
