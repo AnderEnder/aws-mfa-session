@@ -201,9 +201,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-iam"
-version = "1.84.0"
+version = "1.85.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a131574e68af754732c38133ed65e1390a45d080bbc1eacd43c8c571455750fe"
+checksum = "5f589fa966f7855abe3f9499f485347b9587b6d8f0f4435ff3492c48340e427c"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
