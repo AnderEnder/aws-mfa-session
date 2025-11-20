@@ -122,13 +122,13 @@ mod integration_tests {
         ]);
         assert!(args.is_ok());
 
-        // Test maximum duration (129599 seconds, just under 36 hours)
+        // Test maximum duration (129600 seconds, exactly 36 hours)
         let args = Args::try_parse_from([
             "aws-mfa-session",
             "--code",
             "123456",
             "--duration",
-            "129599", // Changed from 129600
+            "129600",
             "-e",
         ]);
         assert!(args.is_ok());
@@ -150,7 +150,7 @@ mod integration_tests {
             "--code",
             "123456",
             "--duration",
-            "129600", // Changed to 129600
+            "129601",
             "-e",
         ]);
         assert!(args.is_err());
@@ -351,7 +351,7 @@ mod integration_tests {
             "--code",
             "123456",
             "--duration",
-            "129599",
+            "129600",
         ]);
         assert!(args.is_ok());
 
@@ -366,7 +366,7 @@ mod integration_tests {
             "--code",
             "123456",
             "--duration",
-            "129600",
+            "129601",
         ]);
         assert!(args.is_err());
     }
