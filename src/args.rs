@@ -40,7 +40,7 @@ pub struct Args {
     #[arg(long = "arn", short = 'a')]
     pub arn: Option<String>,
     /// Session duration in seconds (900-129600)
-    #[arg(long = "duration", short = 'd', default_value_t = 3600, value_parser = clap::value_parser!(i32).range(900..129600))]
+    #[arg(long = "duration", short = 'd', default_value_t = 3600, value_parser = clap::value_parser!(i32).range(900..=129600))]
     pub duration: i32,
     /// Run shell with AWS credentials as environment variables
     #[arg(long = "shell", short = 's')]
