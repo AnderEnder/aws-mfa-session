@@ -152,6 +152,110 @@ Generate session credentials with maximum duration (just under 36 hours):
 aws-mfa-session --code 123456 --duration 129599 --export
 ```
 
+### Using with AWS Assume Role
+
+This tool works well with AWS assume role profiles. A common pattern is to use MFA-authenticated credentials as the source for assuming roles in other AWS accounts.
+
+#### Basic Setup
+
+1. **Base profile** (`~/.aws/credentials`) - contains your IAM user credentials:
+
+```ini
+[mycompany]
+aws_access_key_id = AKIAIOSFODNN7EXAMPLE
+aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+```
+
+2. **Profile configuration** (`~/.aws/config`) - defines MFA device and session profile:
+
+```ini
+[profile mycompany]
+region = us-west-2
+mfa_serial = arn:aws:iam::111111111111:mfa/username
+
+[profile mycompany-session]
+region = us-west-2
+```
+
+3. **Generate MFA session credentials**:
+
+```sh
+aws-mfa-session --profile mycompany --update-profile mycompany-session --code 123456
+```
+
+#### Assume Role Profiles
+
+Now you can create assume role profiles that use the MFA-authenticated session as their source:
+
+```ini
+[profile dev-account]
+region = us-west-2
+output = json
+source_profile = mycompany-session
+role_arn = arn:aws:iam::222222222222:role/AdminRole
+
+[profile prod-account]
+region = us-west-2
+output = json
+source_profile = mycompany-session
+role_arn = arn:aws:iam::333333333333:role/AdminRole
+```
+
+Use the profiles:
+
+```sh
+# After running aws-mfa-session to populate mycompany-session
+aws s3 ls --profile dev-account
+aws ec2 describe-instances --profile prod-account
+```
+
+#### Readonly Assume Role Profiles
+
+AWS CLI supports session policies that restrict permissions when assuming a role. This is useful for creating "readonly" variants of your profiles that limit what actions can be performed, even if the underlying role has broader permissions.
+
+Use `role_session_policy_arns` to attach AWS managed policies:
+
+```ini
+[profile dev-account-readonly]
+region = us-west-2
+output = json
+source_profile = mycompany-session
+role_arn = arn:aws:iam::222222222222:role/AdminRole
+role_session_policy_arns = arn:aws:iam::aws:policy/ReadOnlyAccess
+
+[profile prod-account-readonly]
+region = us-west-2
+output = json
+source_profile = mycompany-session
+role_arn = arn:aws:iam::333333333333:role/AdminRole
+role_session_policy_arns = arn:aws:iam::aws:policy/ReadOnlyAccess
+```
+
+The session policy acts as an **intersection** with the role's permissions - you can only restrict permissions, not expand them beyond what the role allows.
+
+**Other useful AWS managed policies for session restrictions:**
+
+| Policy ARN | Description |
+|------------|-------------|
+| `arn:aws:iam::aws:policy/ReadOnlyAccess` | Read-only access to all AWS services |
+| `arn:aws:iam::aws:policy/SecurityAudit` | Security audit access |
+| `arn:aws:iam::aws:policy/ViewOnlyAccess` | View-only access (more restrictive than ReadOnly) |
+| `arn:aws:iam::aws:policy/job-function/ViewOnlyAccess` | Job function view-only access |
+
+#### Custom Inline Session Policies
+
+For more granular control, use `role_session_policy` with an inline JSON policy:
+
+```ini
+[profile dev-account-s3-readonly]
+region = us-west-2
+source_profile = mycompany-session
+role_arn = arn:aws:iam::222222222222:role/AdminRole
+role_session_policy = {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:Get*","s3:List*"],"Resource":"*"}]}
+```
+
+**Note:** `role_session_policy_arns` requires AWS CLI v2.15.0 or later.
+
 ### Shell-Specific Output Examples
 
 The tool automatically detects your shell and formats output appropriately:
