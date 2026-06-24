@@ -46,10 +46,10 @@ impl Profile {
 /// target section. Everything else — comments, ordering, spacing of other
 /// sections — is preserved byte-for-byte.
 ///
-/// Section detection is line-based: a header is a line whose trimmed text starts
-/// with `[`, and the target section is the header line whose trimmed text equals
-/// `[name]` exactly. This avoids the substring/prefix and `$`-expansion hazards
-/// of the previous regex-replacement approach.
+/// Section detection is line-based: a header is any line whose left-trimmed text
+/// starts with `[`, and the target section is the header line whose fully-trimmed
+/// text equals `[name]` exactly. This avoids the substring/prefix and
+/// `$`-expansion hazards of the previous regex-replacement approach.
 pub fn update_profile(config: &str, profile: &Profile) -> String {
     let target = profile.config_section_header(); // "[name]"
     let new_section = profile.config_section(); // ends with a single '\n'
@@ -62,22 +62,23 @@ pub fn update_profile(config: &str, profile: &Profile) -> String {
     match lines.iter().position(|l| l.trim() == target) {
         Some(start) => {
             // Span runs to the next section header (or EOF)...
-            let mut end = lines.len();
-            for (i, l) in lines.iter().enumerate().skip(start + 1) {
-                if is_header(l) {
-                    end = i;
-                    break;
-                }
-            }
+            let mut end = lines[start + 1..]
+                .iter()
+                .position(|l| is_header(l))
+                .map_or(lines.len(), |i| start + 1 + i);
             // ...but trailing blank lines act as separators and stay put.
             while end - 1 > start && lines[end - 1].trim().is_empty() {
                 end -= 1;
             }
 
             let mut out = String::with_capacity(config.len() + new_section.len());
-            lines[..start].iter().for_each(|l| out.push_str(l));
+            for line in &lines[..start] {
+                out.push_str(line);
+            }
             out.push_str(&new_section);
-            lines[end..].iter().for_each(|l| out.push_str(l));
+            for line in &lines[end..] {
+                out.push_str(line);
+            }
             out
         }
         None if config.is_empty() => new_section,
@@ -116,6 +117,18 @@ fn credential_file() -> io::Result<PathBuf> {
     Ok(file)
 }
 
+/// Set the Unix permission bits of `path`. No-op on non-Unix platforms.
+#[cfg(unix)]
+fn set_mode(path: &std::path::Path, mode: u32) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
+}
+
+#[cfg(not(unix))]
+fn set_mode(_path: &std::path::Path, _mode: u32) -> io::Result<()> {
+    Ok(())
+}
+
 pub fn update_credentials(profile: &Profile) -> io::Result<()> {
     let file_path = credential_file()?;
 
@@ -137,12 +150,10 @@ pub fn update_credentials(profile: &Profile) -> io::Result<()> {
         .unwrap_or_else(|| std::path::Path::new("."));
     if !temp_dir.as_os_str().is_empty() && !temp_dir.exists() {
         fs::create_dir_all(temp_dir)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            // We just created ~/.aws; it should not be group/other accessible.
-            let _ = fs::set_permissions(temp_dir, fs::Permissions::from_mode(0o700));
-        }
+        // We just created ~/.aws; tighten it to owner-only. Best-effort: the
+        // credentials file itself is forced to 0600 below regardless, so a
+        // failure to chmod the directory must not abort the credential write.
+        let _ = set_mode(temp_dir, 0o700);
     }
 
     let temp_file = NamedTempFile::new_in(temp_dir)?;
@@ -150,11 +161,8 @@ pub fn update_credentials(profile: &Profile) -> io::Result<()> {
 
     // Enforce 0600 on the secret-bearing file rather than inheriting whatever
     // permissions the original had (which may have been group/world readable).
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(temp_file.path(), fs::Permissions::from_mode(0o600))?;
-    }
+    // This is the critical protection, so its failure is propagated.
+    set_mode(temp_file.path(), 0o600)?;
 
     temp_file.persist(&file_path)?;
 
@@ -175,6 +183,17 @@ mod test {
             region: Some("us-east-1".to_string()),
         }
     }
+
+    /// Assert the low 9 permission bits of `path`. No-op on non-Unix platforms.
+    #[cfg(unix)]
+    fn assert_mode(path: &std::path::Path, expected: u32, msg: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, expected, "{msg}");
+    }
+
+    #[cfg(not(unix))]
+    fn assert_mode(_path: &std::path::Path, _expected: u32, _msg: &str) {}
 
     #[test]
     fn test_update_profile_empty() {
@@ -679,16 +698,7 @@ aws_secret_access_key = DEFAULTSECRET
         assert!(written.contains("[session]"));
         assert!(written.contains("aws_access_key_id = AKIATEST"));
 
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
-            assert_eq!(
-                mode & 0o777,
-                0o600,
-                "newly created credentials file must be 0600"
-            );
-        }
+        assert_mode(&path, 0o600, "newly created credentials file must be 0600");
     }
 
     #[test]
@@ -697,12 +707,7 @@ aws_secret_access_key = DEFAULTSECRET
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credentials");
         std::fs::write(&path, "[existing]\naws_access_key_id = OLD\n").unwrap();
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-        }
+        set_mode(&path, 0o644).unwrap();
 
         unsafe { std::env::set_var(AWS_SHARED_CREDENTIALS_FILE, &path) };
         let result = update_credentials(&sample_profile("session"));
@@ -713,16 +718,11 @@ aws_secret_access_key = DEFAULTSECRET
         assert!(written.contains("[existing]")); // pre-existing content preserved
         assert!(written.contains("[session]")); // new profile appended
 
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
-            assert_eq!(
-                mode & 0o777,
-                0o600,
-                "loose 0644 permissions must be tightened to 0600"
-            );
-        }
+        assert_mode(
+            &path,
+            0o600,
+            "loose 0644 permissions must be tightened to 0600",
+        );
     }
 
     #[test]
@@ -730,11 +730,7 @@ aws_secret_access_key = DEFAULTSECRET
     fn test_update_credentials_does_not_repermission_existing_dir() {
         let dir = tempfile::tempdir().unwrap();
         // The parent directory already exists with perms the tool must not change.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        set_mode(dir.path(), 0o755).unwrap();
         let path = dir.path().join("credentials");
 
         unsafe { std::env::set_var(AWS_SHARED_CREDENTIALS_FILE, &path) };
@@ -742,18 +738,15 @@ aws_secret_access_key = DEFAULTSECRET
         unsafe { std::env::remove_var(AWS_SHARED_CREDENTIALS_FILE) };
         result.unwrap();
 
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let dir_mode = std::fs::metadata(dir.path()).unwrap().permissions().mode();
-            assert_eq!(
-                dir_mode & 0o777,
-                0o755,
-                "a pre-existing parent directory must be left untouched"
-            );
-            // The credentials file itself is still written 0600.
-            let file_mode = std::fs::metadata(&path).unwrap().permissions().mode();
-            assert_eq!(file_mode & 0o777, 0o600);
-        }
+        assert_mode(
+            dir.path(),
+            0o755,
+            "a pre-existing parent directory must be left untouched",
+        );
+        assert_mode(
+            &path,
+            0o600,
+            "the credentials file itself is still written 0600",
+        );
     }
 }
