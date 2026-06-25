@@ -1,0 +1,17 @@
+# cargo-audit configuration — https://docs.rs/cargo-audit
+#
+# The advisories below are ignored because there is no available fix on our
+# dependency path. They all originate from rustls-webpki 0.101.7, which is
+# pulled in transitively via aws-smithy-http-client 1.1.13 (the latest
+# published version) -> hyper-rustls 0.24.2 -> rustls 0.21.12. `cargo update`
+# is a no-op for this chain and no newer aws-smithy-http-client drops the old
+# rustls 0.21 stack, so the fix has to land upstream in the AWS Smithy runtime.
+#
+# Re-evaluate (and remove entries that no longer appear) whenever the
+# aws-config / aws-sdk-* dependencies are bumped.
+[advisories]
+ignore = [
+    "RUSTSEC-2026-0098", # rustls-webpki: name constraints for URI names incorrectly accepted
+    "RUSTSEC-2026-0099", # rustls-webpki: name constraints accepted for wildcard certificates
+    "RUSTSEC-2026-0104", # rustls-webpki: reachable panic in CRL parsing
+]
