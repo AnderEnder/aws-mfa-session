@@ -5,25 +5,52 @@ on:
     tags:
       - 'v*.*.*'
 
+permissions:
+  contents: read
+
 jobs:
-  release-crates:
+  # Gate: never publish or attach artifacts for a tag whose tests don't pass.
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: publish package to crates
+      - uses: dtolnay/rust-toolchain@stable
+      - name: test
+        run: cargo test --locked --all --verbose
+
+  release-crates:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: publish to crates.io
+        # Skip if this version is already published so re-running a release is
+        # idempotent, but let any real publish failure fail the job (the old
+        # `|| true` masked every error, including broken packaging).
+        env:
+          CARGO_TOKEN: ${{ secrets.CARGO_TOKEN }}
         run: |
-          cargo package
-          cargo publish --token ${{ secrets.CARGO_TOKEN }} || true
+          version="${GITHUB_REF_NAME#v}"
+          if curl -fsSL -A "aws-mfa-session-release-ci" \
+            "https://crates.io/api/v1/crates/aws-mfa-session/${version}" -o /dev/null; then
+            echo "aws-mfa-session ${version} is already on crates.io; skipping publish."
+          else
+            cargo publish --locked --token "${CARGO_TOKEN}"
+          fi
 
   release-linux:
+    needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - name: static build release
         run: |
           docker run --rm -t \
             -v "$(pwd)":/volume \
-            clux/muslrust cargo build --release
+            clux/muslrust cargo build --release --locked
       - name: archive
         run: |
           sudo strip target/x86_64-unknown-linux-musl/release/aws-mfa-session
@@ -36,14 +63,17 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   release-linux-arm:
+    needs: test
     runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - name: static build release
         run: |
           docker run --rm -t \
             -v "$(pwd)":/volume \
-            clux/muslrust cargo build --release
+            clux/muslrust cargo build --release --locked
       - name: archive
         run: |
           sudo strip target/aarch64-unknown-linux-musl/release/aws-mfa-session
@@ -56,12 +86,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   release-osx:
+    needs: test
     runs-on: macOS-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: build release
-        run: cargo build --release --verbose
+        run: cargo build --release --locked --verbose
       - name: archive
         run: tar -C target/release -czf $(pwd)/aws-mfa-session-aarch64-osx.tar.gz aws-mfa-session
       - name: publish release
@@ -72,12 +105,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   release-osx-x86_64:
+    needs: test
     runs-on: macos-15-intel
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: build release
-        run: cargo build --release --verbose
+        run: cargo build --release --locked --verbose
       - name: archive
         run: tar -C target/release -czf $(pwd)/aws-mfa-session-x86_64-osx.tar.gz aws-mfa-session
       - name: publish release
@@ -88,11 +124,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   release-windows:
+    needs: test
     runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - name: build release
-        run: cargo build --release --verbose
+        run: cargo build --release --locked --verbose
       - name: archive
         run: tar -C target/release -czf $(pwd)/aws-mfa-session-x86_64-windows.tar.gz aws-mfa-session.exe
         shell: bash
@@ -104,12 +143,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   release-windows-arm:
+    needs: test
     runs-on: windows-11-arm
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: build release
-        run: cargo build --release --verbose
+        run: cargo build --release --locked --verbose
       - name: archive
         run: tar -C target/release -czf $(pwd)/aws-mfa-session-aarch64-windows.tar.gz aws-mfa-session.exe
         shell: bash
