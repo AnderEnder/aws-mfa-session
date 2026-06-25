@@ -71,6 +71,20 @@ mod tests {
     }
 
     #[test]
+    fn test_sdk_error_conversion() {
+        // Any SDK operation error collapses to CliError::SdkError via the generic
+        // From<SdkError<E>>. construction_failure needs no concrete operation error.
+        let sdk_error: SdkError<std::io::Error> =
+            SdkError::construction_failure(std::io::Error::other("boom"));
+        let cli_error: CliError = sdk_error.into();
+
+        match cli_error {
+            CliError::SdkError(msg) => assert!(msg.contains("ConstructionFailure")),
+            _ => panic!("Expected SdkError variant"),
+        }
+    }
+
+    #[test]
     fn test_cli_error_is_error_trait() {
         let error = CliError::ValidationError("test".to_string());
         let _: &dyn Error = &error;
