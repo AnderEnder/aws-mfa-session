@@ -8,7 +8,10 @@ pub fn region(s: &str) -> Result<Region, CliError> {
 }
 
 fn parse_code(s: &str) -> Result<String, CliError> {
-    if s.chars().all(char::is_numeric) && s.len() == 6 {
+    // ASCII digits only: `char::is_numeric` accepts Unicode digits (e.g. "٦٦٦",
+    // superscripts) and `str::len` counts bytes, so the old check could pass a
+    // non-numeric, non-6-char code. All-ASCII-digit guarantees len == char count.
+    if s.len() == 6 && s.bytes().all(|b| b.is_ascii_digit()) {
         Ok(s.to_string())
     } else {
         Err(CliError::ValidationError(
@@ -103,6 +106,17 @@ mod tests {
         assert!(parse_code("abcdef").is_err());
         assert!(parse_code("12-456").is_err());
         assert!(parse_code("123 56").is_err());
+    }
+
+    #[test]
+    fn test_parse_code_rejects_non_ascii_digits() {
+        // Arabic-Indic digits: 6 chars but 12 bytes, all `char::is_numeric`.
+        assert!(parse_code("٦٦٦٦٦٦").is_err());
+        // Fullwidth digits: 6 chars, 18 bytes.
+        assert!(parse_code("１２３４５６").is_err());
+        // Superscript two (U+00B2): 2 bytes each, so 3 of them is 6 bytes and
+        // `is_numeric` — the case the old `len() == 6` check wrongly accepted.
+        assert!(parse_code("²²²").is_err());
     }
 
     #[test]
