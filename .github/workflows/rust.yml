@@ -6,6 +6,9 @@ on:
       - "*"
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on:  ${{ matrix.os }}
@@ -34,3 +37,25 @@ jobs:
         env:
           RUST_BACKTRACE: 1
           RUST_LOG: trace
+
+  msrv:
+    # Verifies the rust-version declared in Cargo.toml still builds, and flags
+    # drift when an AWS SDK dependency raises its MSRV.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git
+            target
+          key: msrv-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Install MSRV toolchain (1.91.1)
+        uses: dtolnay/rust-toolchain@1.91.1
+      - name: cargo check on MSRV
+        run: cargo check --locked --all-targets
