@@ -13,6 +13,11 @@ keywords = ["aws", "sts", "token", "credentials"]
 categories = ["command-line-utilities"]
 exclude = [".github/*"]
 edition = "2024"
+# Minimum supported Rust version. The floor is driven by the aws-config /
+# aws-sdk-* family, which currently declare rust-version = 1.91.1 (well above the
+# edition-2024 minimum of 1.85). Bump when those dependencies raise their MSRV;
+# the `msrv` CI job verifies this value still builds.
+rust-version = "1.91.1"
 license = "MIT"
 
 [dependencies]

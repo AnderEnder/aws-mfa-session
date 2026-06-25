@@ -2,9 +2,16 @@ name: Code check
 
 on: [ pull_request ]
 
+permissions:
+  contents: read
+
 jobs:
   clippy:
     runs-on: ubuntu-latest
+    # clippy-action posts results as a check run via the github-pr-check reporter.
+    permissions:
+      contents: read
+      checks: write
     steps:
       - uses: actions/checkout@v4
       - name: Cache cargo
@@ -19,9 +26,8 @@ jobs:
             target
           key: clippy-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - name: Install clippy
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
           components: clippy
       - name: clippy check
         uses: giraffate/clippy-action@v1
