@@ -13,7 +13,7 @@ A command line utility to generate temporary AWS credentials using virtual MFA d
 * **Automatic MFA device selection** - reads `mfa_serial` from AWS profile configuration (~/.aws/config or ~/.aws/credentials), with fallback to automatic device detection
 * Generate temporary credentials using AWS STS
 * **Enhanced error reporting** with detailed error messages
-* **Atomic credentials file updates** - prevents file corruption during concurrent access
+* **Atomic credentials file updates** - the file is replaced via an atomic rename, preventing partial/torn writes
 * Multiple output options:
   * Export as environment variables
   * Launch new shell with credentials
@@ -354,8 +354,8 @@ Options:
 
 * **Input validation**: MFA codes must be exactly 6 digits
 * **Duration validation**: Session duration is validated to be within AWS limits (15 minutes to 36 hours)
-* **Atomic file operations**: Credentials file updates are atomic to prevent corruption
-* **Permission preservation**: Original file permissions are maintained when updating credentials
+* **Atomic file operations**: Credentials file updates use an atomic rename to prevent partial/torn writes
+* **Restrictive permissions**: On Unix, the credentials file is written with `0600` permissions (owner read/write only)
 * **Shell injection protection**: All shell output is properly escaped for security
 * **Multi-shell support**: Supports Bash, Zsh, Fish, Sh, CMD, and PowerShell with proper prompt setting
 
