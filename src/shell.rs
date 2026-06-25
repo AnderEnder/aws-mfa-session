@@ -1,3 +1,5 @@
+// `PowerShell` is a proper product name, not redundant naming against `Shell`.
+#[allow(clippy::enum_variant_names)]
 #[derive(Default, PartialEq, Debug)]
 pub enum Shell {
     #[default]

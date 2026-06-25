@@ -1,58 +1,30 @@
 use std::fmt::{Debug, Display};
 
-use aws_sdk_iam::{error::SdkError, operation::list_mfa_devices::ListMFADevicesError};
-use aws_sdk_sts::operation::{
-    get_caller_identity::GetCallerIdentityError, get_session_token::GetSessionTokenError,
-};
+use aws_sdk_iam::error::SdkError;
 use miette::Diagnostic;
+use thiserror::Error;
 
-#[derive(Debug, Diagnostic)]
+#[derive(Debug, Error, Diagnostic)]
 pub enum CliError {
+    #[error("Validation error: {0}")]
     ValidationError(String),
+    #[error("No MFA device in user profile")]
     NoMFA,
+    #[error("No returned credentials")]
     NoCredentials,
+    #[error("No returned account")]
     NoAccount,
-    ListMFADevicesError(ListMFADevicesError),
-    GetSessionTokenError(GetSessionTokenError),
-    GetCallerIdentityError(GetCallerIdentityError),
+    #[error("SDKError: {0}")]
     SdkError(String),
-    IoError(std::io::Error),
+    #[error("IOError: {0}")]
+    IoError(#[from] std::io::Error),
 }
 
-impl std::fmt::Display for CliError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            CliError::ValidationError(e) => write!(f, "Validation error: {e}"),
-            CliError::NoMFA => write!(f, "No MFA device in user profile"),
-            CliError::NoCredentials => write!(f, "No returned credentials"),
-            CliError::NoAccount => write!(f, "No returned account"),
-            CliError::ListMFADevicesError(e) => write!(f, "No mfa devices: {e:?}"),
-            CliError::GetSessionTokenError(e) => write!(f, "Cannot receive token: {e:?}"),
-            CliError::GetCallerIdentityError(e) => write!(f, "Error: {e:?}"),
-            CliError::SdkError(e) => write!(f, "SDKError: {e:?}"),
-            CliError::IoError(e) => write!(f, "IOError: {e:?}"),
-        }
-    }
-}
-
-impl std::error::Error for CliError {}
-
-impl From<std::io::Error> for CliError {
-    fn from(e: std::io::Error) -> Self {
-        CliError::IoError(e)
-    }
-}
-
+// thiserror's `#[from]` only generates `From` for a concrete type, so the
+// generic conversion that collapses every SDK operation error stays manual.
 impl<E: Display + Debug> From<SdkError<E>> for CliError {
     fn from(e: SdkError<E>) -> Self {
-        match e {
-            SdkError::ConstructionFailure(e) => Self::SdkError(format!("{e:?}")),
-            SdkError::TimeoutError(e) => Self::SdkError(format!("{e:?}")),
-            SdkError::DispatchFailure(e) => Self::SdkError(format!("{e:?}")),
-            SdkError::ResponseError(e) => Self::SdkError(format!("{e:?}")),
-            SdkError::ServiceError(e) => Self::SdkError(format!("{e:?}")),
-            _ => Self::SdkError("Unknown SDK error".to_string()),
-        }
+        CliError::SdkError(format!("{e:?}"))
     }
 }
 
@@ -129,7 +101,7 @@ mod tests {
             CliError::NoCredentials,
             CliError::NoAccount,
             CliError::SdkError("SDK error".to_string()),
-            CliError::IoError(std::io::Error::new(std::io::ErrorKind::Other, "test")),
+            CliError::IoError(std::io::Error::other("test")),
         ];
 
         for error in errors {
