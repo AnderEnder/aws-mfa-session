@@ -56,6 +56,6 @@ jobs:
             target
           key: msrv-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - name: Install MSRV toolchain (1.91.1)
-        uses: dtolnay/rust-toolchain@1.91.1
+        uses: dtolnay/rust-toolchain@1.100.0
       - name: cargo check on MSRV
         run: cargo check --locked --all-targets
