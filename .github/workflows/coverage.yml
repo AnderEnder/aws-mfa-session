@@ -32,6 +32,6 @@ jobs:
     - name: Run coverage
       run: cargo tarpaulin -f -t 5 --out Xml -v -- --test-threads=1 || true
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v5
+      uses: codecov/codecov-action@v7
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
