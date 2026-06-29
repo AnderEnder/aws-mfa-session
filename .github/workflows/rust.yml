@@ -17,7 +17,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macOS-latest, windows-latest, macos-15-intel, windows-11-arm, ubuntu-24.04-arm]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Cache cargo
         uses: actions/cache@v6
         with:
@@ -43,7 +43,7 @@ jobs:
     # drift when an AWS SDK dependency raises its MSRV.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Cache cargo
         uses: actions/cache@v6
         with:
