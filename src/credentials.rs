@@ -1,5 +1,6 @@
 use dirs::home_dir;
 use std::path::PathBuf;
+use std::time::Duration;
 use std::{fs, io};
 use tempfile::NamedTempFile;
 
@@ -129,6 +130,63 @@ fn set_mode(_path: &std::path::Path, _mode: u32) -> io::Result<()> {
     Ok(())
 }
 
+/// Backoff delays between atomic-persist attempts. The number of entries is the
+/// number of retries (total attempts = len + 1); the growth keeps the worst-case
+/// wait under a second while giving a briefly-locked destination time to free up.
+const PERSIST_RETRY_BACKOFF: [Duration; 5] = [
+    Duration::from_millis(20),
+    Duration::from_millis(40),
+    Duration::from_millis(80),
+    Duration::from_millis(160),
+    Duration::from_millis(320),
+];
+
+/// Whether a failed atomic persist (rename) is worth retrying. On Windows the
+/// rename transiently fails when the destination is briefly held open by another
+/// process (antivirus, search indexer): ERROR_ACCESS_DENIED (5),
+/// ERROR_SHARING_VIOLATION (32), ERROR_LOCK_VIOLATION (33). A short retry lets
+/// the other handle close. Every other error is terminal and fails immediately.
+fn is_transient_persist_error(error: &io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(5 | 32 | 33))
+}
+
+/// Run `attempt` until it succeeds, sleeping between transient failures per the
+/// `backoff` schedule and giving up once it is exhausted. Non-transient errors
+/// return immediately. Generic over `attempt` so the retry policy is testable
+/// without provoking a real OS race.
+fn persist_retrying<F>(mut attempt: F, backoff: &[Duration]) -> io::Result<()>
+where
+    F: FnMut() -> io::Result<()>,
+{
+    for delay in backoff {
+        match attempt() {
+            Ok(()) => return Ok(()),
+            Err(e) if is_transient_persist_error(&e) => std::thread::sleep(*delay),
+            Err(e) => return Err(e),
+        }
+    }
+    attempt()
+}
+
+/// Atomically move `temp_file` onto `dest`, retrying transient Windows rename
+/// failures. The temp file is recovered from each failed attempt so the next one
+/// can reuse it.
+fn persist_with_retry(temp_file: NamedTempFile, dest: &std::path::Path) -> io::Result<()> {
+    let mut slot = Some(temp_file);
+    persist_retrying(
+        || {
+            let tf = slot
+                .take()
+                .expect("temp file is present before each attempt");
+            tf.persist(dest).map(|_| ()).map_err(|e| {
+                slot = Some(e.file);
+                e.error
+            })
+        },
+        &PERSIST_RETRY_BACKOFF,
+    )
+}
+
 pub fn update_credentials(profile: &Profile) -> io::Result<()> {
     let file_path = credential_file()?;
 
@@ -164,7 +222,7 @@ pub fn update_credentials(profile: &Profile) -> io::Result<()> {
     // This is the critical protection, so its failure is propagated.
     set_mode(temp_file.path(), 0o600)?;
 
-    temp_file.persist(&file_path)?;
+    persist_with_retry(temp_file, &file_path)?;
 
     Ok(())
 }
@@ -748,5 +806,96 @@ aws_secret_access_key = DEFAULTSECRET
             0o600,
             "the credentials file itself is still written 0600",
         );
+    }
+
+    // Zero-delay schedule so the retry-policy tests stay instant and deterministic
+    // (the production schedule is PERSIST_RETRY_BACKOFF). Length defines the retry
+    // count: total attempts = len + 1.
+    const NO_DELAY: [Duration; 3] = [Duration::ZERO; 3];
+
+    #[test]
+    fn test_is_transient_persist_error() {
+        use io::{Error, ErrorKind};
+        // The Windows rename codes we recover from (code 5 is the observed CI flake).
+        for code in [5, 32, 33] {
+            assert!(
+                is_transient_persist_error(&Error::from_raw_os_error(code)),
+                "os error {code} should be treated as transient"
+            );
+        }
+        // Terminal conditions must not be retried.
+        assert!(!is_transient_persist_error(&Error::from_raw_os_error(2)));
+        assert!(!is_transient_persist_error(&Error::new(
+            ErrorKind::NotFound,
+            "gone"
+        )));
+        assert!(!is_transient_persist_error(&Error::other("no os code")));
+    }
+
+    #[test]
+    fn test_persist_retrying_succeeds_without_retry() {
+        let mut calls = 0;
+        let result = persist_retrying(
+            || {
+                calls += 1;
+                Ok(())
+            },
+            &NO_DELAY,
+        );
+        assert!(result.is_ok());
+        assert_eq!(calls, 1, "a first-try success must not retry");
+    }
+
+    #[test]
+    fn test_persist_retrying_recovers_after_transient_failures() {
+        let mut calls = 0;
+        let result = persist_retrying(
+            || {
+                calls += 1;
+                if calls < 3 {
+                    Err(io::Error::from_raw_os_error(5))
+                } else {
+                    Ok(())
+                }
+            },
+            &NO_DELAY,
+        );
+        assert!(result.is_ok());
+        assert_eq!(
+            calls, 3,
+            "must keep retrying until the transient error clears"
+        );
+    }
+
+    #[test]
+    fn test_persist_retrying_gives_up_after_exhausting_retries() {
+        let mut calls = 0;
+        let result = persist_retrying(
+            || {
+                calls += 1;
+                Err(io::Error::from_raw_os_error(5))
+            },
+            &NO_DELAY,
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            calls,
+            NO_DELAY.len() + 1,
+            "one attempt per backoff slot plus a final attempt"
+        );
+    }
+
+    #[test]
+    fn test_persist_retrying_non_transient_fails_fast() {
+        let mut calls = 0;
+        let result = persist_retrying(
+            || {
+                calls += 1;
+                Err(io::Error::new(io::ErrorKind::NotFound, "gone"))
+            },
+            &NO_DELAY,
+        );
+        assert!(result.is_err());
+        assert_eq!(calls, 1, "a terminal error must not be retried");
     }
 }
