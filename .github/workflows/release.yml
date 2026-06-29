@@ -56,7 +56,7 @@ jobs:
           sudo strip target/x86_64-unknown-linux-musl/release/aws-mfa-session
           sudo tar -C target/x86_64-unknown-linux-musl/release -czf  $(pwd)/aws-mfa-session-x86_64-linux.tar.gz aws-mfa-session
       - name: publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: aws-mfa-session-x86_64-linux.tar.gz
         env:
@@ -79,7 +79,7 @@ jobs:
           sudo strip target/aarch64-unknown-linux-musl/release/aws-mfa-session
           sudo tar -C target/aarch64-unknown-linux-musl/release -czf  $(pwd)/aws-mfa-session-aarch64-linux.tar.gz aws-mfa-session
       - name: publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: aws-mfa-session-aarch64-linux.tar.gz
         env:
@@ -98,7 +98,7 @@ jobs:
       - name: archive
         run: tar -C target/release -czf $(pwd)/aws-mfa-session-aarch64-osx.tar.gz aws-mfa-session
       - name: publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: aws-mfa-session-aarch64-osx.tar.gz
         env:
@@ -117,7 +117,7 @@ jobs:
       - name: archive
         run: tar -C target/release -czf $(pwd)/aws-mfa-session-x86_64-osx.tar.gz aws-mfa-session
       - name: publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: aws-mfa-session-x86_64-osx.tar.gz
         env:
@@ -136,7 +136,7 @@ jobs:
         run: tar -C target/release -czf $(pwd)/aws-mfa-session-x86_64-windows.tar.gz aws-mfa-session.exe
         shell: bash
       - name: publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: aws-mfa-session-x86_64-windows.tar.gz
         env:
@@ -156,7 +156,7 @@ jobs:
         run: tar -C target/release -czf $(pwd)/aws-mfa-session-aarch64-windows.tar.gz aws-mfa-session.exe
         shell: bash
       - name: publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: aws-mfa-session-aarch64-windows.tar.gz
         env:
