@@ -57,6 +57,20 @@ pub struct Args {
 }
 
 impl Args {
+    /// At least one output mode must be selected. Otherwise `run` would mint a
+    /// session token — spending the single-use MFA code — and then discard it.
+    pub fn ensure_output_mode(&self) -> Result<(), CliError> {
+        if self.shell || self.export || self.session_profile.is_some() {
+            Ok(())
+        } else {
+            Err(CliError::ValidationError(
+                "no output mode selected: pass at least one of --shell/-s, \
+                 --export/-e, or --update-profile/-u"
+                    .to_string(),
+            ))
+        }
+    }
+
     pub fn get_code(&mut self) -> Result<(), CliError> {
         self.code = match &self.code {
             None => {
@@ -117,6 +131,25 @@ mod tests {
         // Superscript two (U+00B2): 2 bytes each, so 3 of them is 6 bytes and
         // `is_numeric` — the case the old `len() == 6` check wrongly accepted.
         assert!(parse_code("²²²").is_err());
+    }
+
+    #[test]
+    fn test_ensure_output_mode_rejects_when_none_selected() {
+        let args = Args::try_parse_from(["aws-mfa-session", "-c", "123456"]).unwrap();
+        assert!(args.ensure_output_mode().is_err());
+    }
+
+    #[test]
+    fn test_ensure_output_mode_accepts_each_mode() {
+        for flag in ["-s", "-e"] {
+            let args = Args::try_parse_from(["aws-mfa-session", "-c", "123456", flag]).unwrap();
+            assert!(
+                args.ensure_output_mode().is_ok(),
+                "{flag} should be accepted"
+            );
+        }
+        let args = Args::try_parse_from(["aws-mfa-session", "-c", "123456", "-u", "sess"]).unwrap();
+        assert!(args.ensure_output_mode().is_ok());
     }
 
     #[test]

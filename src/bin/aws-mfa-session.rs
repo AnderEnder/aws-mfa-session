@@ -13,9 +13,8 @@ async fn main() {
     fmt().with_env_filter(filter).init();
 
     if let Err(e) = opts.get_code() {
-        eprintln!("Error: {e}");
         tracing::error!(?e, "application error");
-        // Print a fancy error report using miette
+        // Report the error once, as a fancy miette diagnostic.
         eprintln!("{}", miette::Report::new(e));
         exit(1);
     }
