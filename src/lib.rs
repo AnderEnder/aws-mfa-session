@@ -31,6 +31,15 @@ const AWS_DEFAULT_REGION: &str = "AWS_DEFAULT_REGION";
 const AWS_SHARED_CREDENTIALS_FILE: &str = "AWS_SHARED_CREDENTIALS_FILE";
 
 pub async fn run(opts: Args) -> Result<(), CliError> {
+    // Validate inputs before touching AWS — and before the single-use MFA code
+    // is spent on a session token. Bail if there is no output mode to consume
+    // the credentials, or if no MFA code is available (a library caller may not
+    // have run get_code()); the latter previously panicked via `.expect`.
+    opts.ensure_output_mode()?;
+    let token_code = opts
+        .code
+        .ok_or_else(|| CliError::ValidationError("MFA code is required".to_string()))?;
+
     // ProfileProvider is limited, but AWS_PROFILE is used elsewhere
     if let Some(ref profile) = opts.profile {
         // SAFETY: Setting AWS_PROFILE environment variable is safe in this single-threaded context
@@ -83,10 +92,7 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
     let credentials = sts_client
         .get_session_token()
         .set_serial_number(Some(serial_number))
-        .token_code(
-            opts.code
-                .expect("MFA code should be available after get_code() call"),
-        )
+        .token_code(token_code)
         .duration_seconds(opts.duration)
         .send()
         .await?
@@ -115,7 +121,10 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
             access_key_id: c.access_key_id().to_owned(),
             secret_access_key: c.secret_access_key().to_owned(),
             session_token: Some(c.session_token().to_owned()),
-            region: opts.region.map(|r| r.to_string()),
+            // Record the region the session was actually minted under (resolved
+            // from --region, env, profile, or the default) so the written
+            // profile is self-contained, not only when --region was passed.
+            region: shared_config.region().map(|r| r.to_string()),
         };
         update_credentials(&profile)?;
     }
@@ -151,6 +160,25 @@ pub async fn run(opts: Args) -> Result<(), CliError> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[tokio::test]
+    async fn test_run_rejects_missing_output_mode() {
+        // With no -s/-e/-u, run must return an error before any AWS work, so the
+        // MFA code is never sent to STS (guard is the first statement in run).
+        let opts = Args::try_parse_from(["aws-mfa-session", "--code", "123456"]).unwrap();
+        assert!(matches!(run(opts).await, Err(CliError::ValidationError(_))));
+    }
+
+    #[tokio::test]
+    async fn test_run_rejects_missing_code() {
+        // Output mode selected but no MFA code (e.g. a library caller that never
+        // ran get_code): run must return an error, not panic, before any AWS work.
+        let opts = Args::try_parse_from(["aws-mfa-session", "--export"]).unwrap();
+        assert_eq!(opts.code, None);
+        assert!(matches!(run(opts).await, Err(CliError::ValidationError(_))));
+    }
 
     #[test]
     fn test_env_var_setting_logic() {
