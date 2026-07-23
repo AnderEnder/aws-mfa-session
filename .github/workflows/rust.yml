@@ -17,7 +17,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macOS-latest, windows-latest, macos-15-intel, windows-11-arm, ubuntu-24.04-arm]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Cache cargo
         uses: actions/cache@v6
         with:
@@ -43,7 +43,7 @@ jobs:
     # drift when an AWS SDK dependency raises its MSRV.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Cache cargo
         uses: actions/cache@v6
         with:
@@ -55,7 +55,7 @@ jobs:
             ~/.cargo/git
             target
           key: msrv-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-      - name: Install MSRV toolchain (1.91.1)
-        uses: dtolnay/rust-toolchain@1.91.1
+      - name: Install MSRV toolchain (1.94.1)
+        uses: dtolnay/rust-toolchain@1.94.1
       - name: cargo check on MSRV
         run: cargo check --locked --all-targets
