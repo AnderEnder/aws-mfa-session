@@ -26,8 +26,10 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
 aws-types = "1"
 aws-config = "1"
 aws-runtime = "1"
-aws-sdk-iam = "1"
-aws-sdk-sts = "1"
+# Default features minus `rustls`, which adds the legacy hyper 0.14 client
+# (rustls 0.21, h2 0.3) on top of the default rustls 0.23 client.
+aws-sdk-iam = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-sts = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio", "sigv4a"] }
 clap = { version = "4.6", features = ["derive"] }
 tempfile = "3"
 tracing = "0.1"
