@@ -1,31 +1,58 @@
-use std::fmt::{Debug, Display};
+use std::io;
+use std::path::PathBuf;
 
-use aws_sdk_iam::error::SdkError;
 use miette::Diagnostic;
 use thiserror::Error;
 
+/// Every way a run can fail, with a hint on how to fix it where one helps.
 #[derive(Debug, Error, Diagnostic)]
 pub enum CliError {
-    #[error("Validation error: {0}")]
-    ValidationError(String),
-    #[error("No MFA device in user profile")]
-    NoMFA,
-    #[error("No returned credentials")]
-    NoCredentials,
-    #[error("No returned account")]
-    NoAccount,
-    #[error("SDKError: {0}")]
-    SdkError(String),
-    #[error("IOError: {0}")]
-    IoError(#[from] std::io::Error),
-}
+    #[error("no output mode selected")]
+    #[diagnostic(help("pass at least one of --shell/-s, --export/-e, or --update-profile/-u"))]
+    NoOutputMode,
 
-// thiserror's `#[from]` only generates `From` for a concrete type, so the
-// generic conversion that collapses every SDK operation error stays manual.
-impl<E: Display + Debug> From<SdkError<E>> for CliError {
-    fn from(e: SdkError<E>) -> Self {
-        CliError::SdkError(format!("{e:?}"))
-    }
+    #[error("cannot locate the AWS credentials file: no home directory")]
+    #[diagnostic(help("set AWS_SHARED_CREDENTIALS_FILE or pass --credentials-file"))]
+    NoCredentialsFile,
+
+    #[error("no MFA device is assigned to this IAM user")]
+    #[diagnostic(help(
+        "pass the device with --arn, or set mfa_serial for the profile in ~/.aws/config"
+    ))]
+    NoMfaDevice,
+
+    #[error("cannot read the MFA code")]
+    #[diagnostic(help("pass the code with --code when not running in an interactive terminal"))]
+    Prompt(#[source] dialoguer::Error),
+
+    #[error("AWS {operation} failed: {message}")]
+    Aws {
+        operation: &'static str,
+        message: String,
+    },
+
+    #[error("AWS {operation} returned no {field}")]
+    IncompleteResponse {
+        operation: &'static str,
+        field: &'static str,
+    },
+
+    #[error("cannot update the credentials file {}", .path.display())]
+    CredentialsFile {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("cannot start the shell `{program}`")]
+    Shell {
+        program: String,
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("cannot write to stdout")]
+    Stdout(#[source] io::Error),
 }
 
 #[cfg(test)]
@@ -34,94 +61,59 @@ mod tests {
     use std::error::Error;
 
     #[test]
-    fn test_cli_error_display() {
-        let validation_error = CliError::ValidationError("Invalid input".to_string());
+    fn test_display() {
         assert_eq!(
-            validation_error.to_string(),
-            "Validation error: Invalid input"
+            CliError::NoOutputMode.to_string(),
+            "no output mode selected"
         );
-
-        let no_mfa_error = CliError::NoMFA;
-        assert_eq!(no_mfa_error.to_string(), "No MFA device in user profile");
-
-        let no_credentials_error = CliError::NoCredentials;
-        assert_eq!(no_credentials_error.to_string(), "No returned credentials");
-
-        let no_account_error = CliError::NoAccount;
-        assert_eq!(no_account_error.to_string(), "No returned account");
+        assert_eq!(
+            CliError::NoMfaDevice.to_string(),
+            "no MFA device is assigned to this IAM user"
+        );
+        let aws = CliError::Aws {
+            operation: "GetSessionToken",
+            message: "AccessDenied: invalid MFA one time pass code".to_owned(),
+        };
+        assert_eq!(
+            aws.to_string(),
+            "AWS GetSessionToken failed: AccessDenied: invalid MFA one time pass code"
+        );
+        let incomplete = CliError::IncompleteResponse {
+            operation: "GetCallerIdentity",
+            field: "Account",
+        };
+        assert_eq!(
+            incomplete.to_string(),
+            "AWS GetCallerIdentity returned no Account"
+        );
+        let file = CliError::CredentialsFile {
+            path: PathBuf::from("/tmp/credentials"),
+            source: io::Error::other("disk full"),
+        };
+        assert_eq!(
+            file.to_string(),
+            "cannot update the credentials file /tmp/credentials"
+        );
     }
 
     #[test]
-    fn test_cli_error_debug() {
-        let validation_error = CliError::ValidationError("test".to_string());
-        let debug_str = format!("{validation_error:?}");
-        assert!(debug_str.contains("ValidationError"));
-        assert!(debug_str.contains("test"));
+    fn test_io_errors_keep_their_source() {
+        let error = CliError::Shell {
+            program: "/bin/nope".to_owned(),
+            source: io::Error::new(io::ErrorKind::NotFound, "not found"),
+        };
+        let source = error.source().expect("the io::Error is the source");
+        assert_eq!(source.to_string(), "not found");
     }
 
     #[test]
-    fn test_io_error_conversion() {
-        let io_error = std::io::Error::new(std::io::ErrorKind::NotFound, "File not found");
-        let cli_error: CliError = io_error.into();
-
-        match cli_error {
-            CliError::IoError(_) => {}
-            _ => panic!("Expected IoError variant"),
-        }
-    }
-
-    #[test]
-    fn test_sdk_error_conversion() {
-        // Any SDK operation error collapses to CliError::SdkError via the generic
-        // From<SdkError<E>>. construction_failure needs no concrete operation error.
-        let sdk_error: SdkError<std::io::Error> =
-            SdkError::construction_failure(std::io::Error::other("boom"));
-        let cli_error: CliError = sdk_error.into();
-
-        match cli_error {
-            CliError::SdkError(msg) => assert!(msg.contains("ConstructionFailure")),
-            _ => panic!("Expected SdkError variant"),
-        }
-    }
-
-    #[test]
-    fn test_cli_error_is_error_trait() {
-        let error = CliError::ValidationError("test".to_string());
-        let _: &dyn Error = &error;
-    }
-
-    #[test]
-    fn test_cli_error_source() {
-        let validation_error = CliError::ValidationError("test".to_string());
-        assert!(validation_error.source().is_none());
-
-        // IoError variant contains the source error
-        let io_error = std::io::Error::new(std::io::ErrorKind::NotFound, "File not found");
-        let cli_error = CliError::IoError(io_error);
-        // Check that we can access the source
-        match cli_error {
-            CliError::IoError(ref inner) => {
-                assert_eq!(inner.kind(), std::io::ErrorKind::NotFound);
-            }
-            _ => panic!("Expected IoError variant"),
-        }
-    }
-
-    #[test]
-    fn test_all_error_variants() {
-        let errors = vec![
-            CliError::ValidationError("test".to_string()),
-            CliError::NoMFA,
-            CliError::NoCredentials,
-            CliError::NoAccount,
-            CliError::SdkError("SDK error".to_string()),
-            CliError::IoError(std::io::Error::other("test")),
-        ];
-
-        for error in errors {
-            // Ensure all variants can be displayed and debugged
-            let _display = error.to_string();
-            let _debug = format!("{error:?}");
+    fn test_actionable_errors_have_help() {
+        for error in [
+            CliError::NoOutputMode,
+            CliError::NoCredentialsFile,
+            CliError::NoMfaDevice,
+        ] {
+            assert!(error.help().is_some(), "{error} should explain the fix");
         }
     }
 }
