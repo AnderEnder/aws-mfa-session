@@ -1,181 +1,121 @@
-use crate::error::CliError;
-use aws_config::Region;
-use clap::Parser;
-use dialoguer::Input;
+//! Command-line interface.
 
-pub fn region(s: &str) -> Result<Region, CliError> {
-    Ok(Region::new(s.to_owned()))
-}
+use clap::builder::PossibleValue;
+use clap::{ArgGroup, Parser, ValueEnum};
 
-fn parse_code(s: &str) -> Result<String, CliError> {
-    // ASCII digits only: `char::is_numeric` accepts Unicode digits (e.g. "٦٦٦",
-    // superscripts) and `str::len` counts bytes, so the old check could pass a
-    // non-numeric, non-6-char code. All-ASCII-digit guarantees len == char count.
-    if s.len() == 6 && s.bytes().all(|b| b.is_ascii_digit()) {
-        Ok(s.to_string())
-    } else {
-        Err(CliError::ValidationError(
-            "MFA code must be exactly 6 digits".to_string(),
-        ))
-    }
-}
+use crate::export::ExportFormat;
+use crate::mfa::MfaCode;
+use crate::shell::Shell;
 
 #[derive(Parser, Debug, Clone)]
 #[command(
     name = "aws-mfa-session",
+    version,
     about = "AWS MFA session manager",
     long_about = None,
+    // Without an output mode the session would be minted — spending the MFA
+    // code — and then discarded.
+    group(
+        ArgGroup::new("output")
+            .required(true)
+            .multiple(true)
+            .args(["shell", "export", "session_profile"])
+    ),
 )]
 pub struct Args {
     /// AWS credential profile to use. AWS_PROFILE is used by default
-    #[arg(long = "profile", short = 'p')]
+    #[arg(long, short = 'p')]
     pub profile: Option<String>,
     /// AWS credentials file location to use. AWS_SHARED_CREDENTIALS_FILE is used if not defined
-    #[arg(long = "credentials-file", short = 'f')]
+    #[arg(long, short = 'f')]
     pub credentials_file: Option<String>,
     /// AWS region. AWS_REGION is used if not defined
-    #[arg(long = "region", short = 'r', value_parser = region)]
-    pub region: Option<Region>,
-    /// MFA code from MFA resource
-    #[arg(long = "code", short = 'c', value_parser = parse_code)]
-    pub code: Option<String>,
+    #[arg(long, short = 'r')]
+    pub region: Option<String>,
+    /// MFA code from MFA resource. Prompted for when not provided
+    #[arg(long, short = 'c')]
+    pub code: Option<MfaCode>,
     /// MFA device ARN. If not provided, will try to read mfa_serial from AWS profile configuration, then fall back to automatic detection
-    #[arg(long = "arn", short = 'a')]
+    #[arg(long, short = 'a')]
     pub arn: Option<String>,
     /// Session duration in seconds (900-129600)
-    #[arg(long = "duration", short = 'd', default_value_t = 3600, value_parser = clap::value_parser!(i32).range(900..=129600))]
+    #[arg(long, short = 'd', default_value_t = 3600, value_parser = clap::value_parser!(i32).range(900..=129600))]
     pub duration: i32,
     /// Run shell with AWS credentials as environment variables
-    #[arg(long = "shell", short = 's')]
+    #[arg(long, short = 's')]
     pub shell: bool,
     /// Print(export) AWS credentials as environment variables
-    #[arg(long = "export", short = 'e')]
+    #[arg(long, short = 'e')]
     pub export: bool,
-    /// Update AWS credential profile with temporary session credentials
+    /// Output format for --export. Detected from SHELL if not defined
+    #[arg(long, requires = "export")]
+    pub format: Option<ExportFormat>,
+    /// Update AWS credential profile with temporary session credentials. A profile that is still valid is reused
     #[arg(long = "update-profile", short = 'u')]
     pub session_profile: Option<String>,
+    /// Request new credentials even if the --update-profile profile is still valid
+    #[arg(long, requires = "session_profile")]
+    pub force: bool,
 }
 
-impl Args {
-    /// At least one output mode must be selected. Otherwise `run` would mint a
-    /// session token — spending the single-use MFA code — and then discard it.
-    pub fn ensure_output_mode(&self) -> Result<(), CliError> {
-        if self.shell || self.export || self.session_profile.is_some() {
-            Ok(())
-        } else {
-            Err(CliError::ValidationError(
-                "no output mode selected: pass at least one of --shell/-s, \
-                 --export/-e, or --update-profile/-u"
-                    .to_string(),
-            ))
-        }
+impl ValueEnum for ExportFormat {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[
+            ExportFormat::Shell(Shell::Bash),
+            ExportFormat::Shell(Shell::Zsh),
+            ExportFormat::Shell(Shell::Sh),
+            ExportFormat::Shell(Shell::Fish),
+            ExportFormat::Shell(Shell::Cmd),
+            ExportFormat::Shell(Shell::PowerShell),
+            ExportFormat::Json,
+        ]
     }
 
-    pub fn get_code(&mut self) -> Result<(), CliError> {
-        self.code = match &self.code {
-            None => {
-                if cfg!(test) {
-                    Some("123456".to_string())
-                } else {
-                    Some(ask_code_interactive()?)
-                }
+    fn to_possible_value(&self) -> Option<PossibleValue> {
+        Some(match self {
+            ExportFormat::Shell(Shell::PowerShell) => {
+                PossibleValue::new("powershell").alias("pwsh")
             }
-            code => code.to_owned(),
-        };
-        Ok(())
+            ExportFormat::Shell(shell) => PossibleValue::new(shell.name()),
+            ExportFormat::Json => PossibleValue::new("json"),
+        })
     }
-}
-
-fn ask_code_interactive() -> Result<String, CliError> {
-    let code: String = Input::new()
-        .with_prompt("Enter MFA code")
-        .interact_text()
-        .map_err(|e| CliError::ValidationError(e.to_string()))?;
-
-    parse_code(&code)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use clap::CommandFactory;
+    use clap::error::ErrorKind;
 
-    #[test]
-    fn test_parse_code_valid() {
-        assert_eq!(parse_code("123456").unwrap(), "123456");
-        assert_eq!(parse_code("000000").unwrap(), "000000");
-        assert_eq!(parse_code("999999").unwrap(), "999999");
+    fn parse(args: &[&str]) -> Result<Args, clap::Error> {
+        Args::try_parse_from(std::iter::once("aws-mfa-session").chain(args.iter().copied()))
     }
 
     #[test]
-    fn test_parse_code_invalid_length() {
-        assert!(parse_code("12345").is_err());
-        assert!(parse_code("1234567").is_err());
-        assert!(parse_code("").is_err());
+    fn test_command_is_well_formed() {
+        Args::command().debug_assert();
     }
 
     #[test]
-    fn test_parse_code_invalid_characters() {
-        assert!(parse_code("12345a").is_err());
-        assert!(parse_code("abcdef").is_err());
-        assert!(parse_code("12-456").is_err());
-        assert!(parse_code("123 56").is_err());
-    }
-
-    #[test]
-    fn test_parse_code_rejects_non_ascii_digits() {
-        // Arabic-Indic digits: 6 chars but 12 bytes, all `char::is_numeric`.
-        assert!(parse_code("٦٦٦٦٦٦").is_err());
-        // Fullwidth digits: 6 chars, 18 bytes.
-        assert!(parse_code("１２３４５６").is_err());
-        // Superscript two (U+00B2): 2 bytes each, so 3 of them is 6 bytes and
-        // `is_numeric` — the case the old `len() == 6` check wrongly accepted.
-        assert!(parse_code("²²²").is_err());
-    }
-
-    #[test]
-    fn test_ensure_output_mode_rejects_when_none_selected() {
-        let args = Args::try_parse_from(["aws-mfa-session", "-c", "123456"]).unwrap();
-        assert!(args.ensure_output_mode().is_err());
-    }
-
-    #[test]
-    fn test_ensure_output_mode_accepts_each_mode() {
-        for flag in ["-s", "-e"] {
-            let args = Args::try_parse_from(["aws-mfa-session", "-c", "123456", flag]).unwrap();
-            assert!(
-                args.ensure_output_mode().is_ok(),
-                "{flag} should be accepted"
-            );
-        }
-        let args = Args::try_parse_from(["aws-mfa-session", "-c", "123456", "-u", "sess"]).unwrap();
-        assert!(args.ensure_output_mode().is_ok());
-    }
-
-    #[test]
-    fn test_region_parsing() {
-        let parsed_region = region("us-east-1").unwrap();
-        assert_eq!(parsed_region.to_string(), "us-east-1");
-
-        let parsed_region = region("eu-west-1").unwrap();
-        assert_eq!(parsed_region.to_string(), "eu-west-1");
-    }
-
-    #[test]
-    fn test_args_parsing_minimal() {
-        let args = Args::try_parse_from(["aws-mfa-session", "--code", "123456"]);
-        assert!(args.is_ok());
-        let args = args.unwrap();
-        assert_eq!(args.code, Some("123456".to_string()));
-        assert_eq!(args.duration, 3600); // default
+    fn test_defaults() {
+        let args = parse(&["-e"]).unwrap();
+        assert_eq!(args.duration, 3600);
+        assert!(args.export);
         assert!(!args.shell);
-        assert!(!args.export);
+        assert!(!args.force);
+        assert_eq!(args.code, None);
+        assert_eq!(args.format, None);
+        assert!(args.profile.is_none());
+        assert!(args.credentials_file.is_none());
+        assert!(args.region.is_none());
+        assert!(args.arn.is_none());
+        assert!(args.session_profile.is_none());
     }
 
     #[test]
-    fn test_args_parsing_all_options() {
-        let args = Args::try_parse_from([
-            "aws-mfa-session",
+    fn test_all_long_options() {
+        let args = parse(&[
             "--profile",
             "test-profile",
             "--credentials-file",
@@ -188,67 +128,38 @@ mod tests {
             "arn:aws:iam::123456789012:mfa/test-user",
             "--duration",
             "7200",
-            "-s",
-            "-e",
+            "--shell",
+            "--export",
+            "--format",
+            "fish",
             "--update-profile",
             "temp-session",
-        ]);
+            "--force",
+        ])
+        .unwrap();
 
-        assert!(args.is_ok());
-        let args = args.unwrap();
-        assert_eq!(args.profile, Some("test-profile".to_string()));
+        assert_eq!(args.profile.as_deref(), Some("test-profile"));
         assert_eq!(
-            args.credentials_file,
-            Some("/custom/path/credentials".to_string())
+            args.credentials_file.as_deref(),
+            Some("/custom/path/credentials")
         );
-        assert_eq!(args.region.unwrap().to_string(), "us-west-2");
-        assert_eq!(args.code, Some("654321".to_string()));
+        assert_eq!(args.region.as_deref(), Some("us-west-2"));
+        assert_eq!(args.code.unwrap().as_str(), "654321");
         assert_eq!(
-            args.arn,
-            Some("arn:aws:iam::123456789012:mfa/test-user".to_string())
+            args.arn.as_deref(),
+            Some("arn:aws:iam::123456789012:mfa/test-user")
         );
         assert_eq!(args.duration, 7200);
         assert!(args.shell);
         assert!(args.export);
-        assert_eq!(args.session_profile, Some("temp-session".to_string()));
+        assert_eq!(args.format, Some(ExportFormat::Shell(Shell::Fish)));
+        assert_eq!(args.session_profile.as_deref(), Some("temp-session"));
+        assert!(args.force);
     }
 
     #[test]
-    fn test_args_parsing_invalid_code() {
-        let args = Args::try_parse_from(["aws-mfa-session", "--code", "12345"]);
-        assert!(args.is_err());
-
-        let args = Args::try_parse_from(["aws-mfa-session", "--code", "abcdef"]);
-        assert!(args.is_err());
-    }
-
-    #[test]
-    fn test_args_parsing_invalid_duration() {
-        let args_low =
-            Args::try_parse_from(["aws-mfa-session", "--code", "123456", "--duration", "800"]);
-        assert!(args_low.is_err());
-
-        let args_high = Args::try_parse_from([
-            "aws-mfa-session",
-            "--code",
-            "123456",
-            "--duration",
-            "200000",
-        ]);
-        assert!(args_high.is_err());
-    }
-
-    #[test]
-    fn test_args_parsing_missing_code() {
-        let args = Args::try_parse_from(["aws-mfa-session"]);
-        // This should succeed, as code is optional in the Args struct
-        assert!(args.is_ok());
-    }
-
-    #[test]
-    fn test_args_short_flags() {
-        let args = Args::try_parse_from([
-            "aws-mfa-session",
+    fn test_short_flags() {
+        let args = parse(&[
             "-p",
             "profile",
             "-f",
@@ -265,79 +176,101 @@ mod tests {
             "-e",
             "-u",
             "session",
-        ]);
+        ])
+        .unwrap();
 
-        assert!(args.is_ok());
-        let args = args.unwrap();
-        assert_eq!(args.profile, Some("profile".to_string()));
-        assert_eq!(args.credentials_file, Some("/path/to/file".to_string()));
-        assert_eq!(args.region.unwrap().to_string(), "ap-southeast-1");
-        assert_eq!(args.code, Some("123456".to_string()));
-        assert_eq!(args.arn, Some("arn:aws:iam::123:mfa/user".to_string()));
+        assert_eq!(args.profile.as_deref(), Some("profile"));
+        assert_eq!(args.credentials_file.as_deref(), Some("/path/to/file"));
+        assert_eq!(args.region.as_deref(), Some("ap-southeast-1"));
+        assert_eq!(args.code.unwrap().as_str(), "123456");
+        assert_eq!(args.arn.as_deref(), Some("arn:aws:iam::123:mfa/user"));
         assert_eq!(args.duration, 1800);
         assert!(args.shell);
         assert!(args.export);
-        assert_eq!(args.session_profile, Some("session".to_string()));
+        assert_eq!(args.session_profile.as_deref(), Some("session"));
     }
 
     #[test]
-    fn test_command_structure() {
-        let cmd = Args::command();
-        assert_eq!(cmd.get_name(), "aws-mfa-session");
-        assert!(cmd.get_about().is_some());
+    fn test_combined_short_flags() {
+        let args = parse(&["-se"]).unwrap();
+        assert!(args.shell && args.export);
     }
 
     #[test]
-    fn test_args_clone() {
-        let args = Args::try_parse_from(["aws-mfa-session", "--code", "123456"]).unwrap();
-        let cloned = args.clone();
-        assert_eq!(args.code, cloned.code);
-        assert_eq!(args.duration, cloned.duration);
+    fn test_requires_an_output_mode() {
+        let error = parse(&["--code", "123456"]).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+
+        assert!(parse(&["-s"]).is_ok());
+        assert!(parse(&["-e"]).is_ok());
+        assert!(parse(&["-u", "session"]).is_ok());
     }
 
     #[test]
-    fn test_args_debug() {
-        let args = Args::try_parse_from(["aws-mfa-session", "--code", "123456"]).unwrap();
-        let debug_str = format!("{args:?}");
-        assert!(debug_str.contains("Args"));
-        assert!(debug_str.contains("123456"));
+    fn test_rejects_invalid_code() {
+        for code in ["12345", "1234567", "abcdef", "12-456", ""] {
+            let error = parse(&["-e", "--code", code]).unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::ValueValidation, "code {code:?}");
+            assert!(error.to_string().contains("exactly 6 digits"));
+        }
     }
 
     #[test]
-    fn test_get_code_with_existing_code() {
-        let mut args = Args::try_parse_from(["aws-mfa-session", "--code", "654321"]).unwrap();
-        assert_eq!(args.code, Some("654321".to_string()));
-
-        // get_code should not change existing code
-        args.get_code().unwrap();
-        assert_eq!(args.code, Some("654321".to_string()));
+    fn test_duration_bounds() {
+        assert_eq!(parse(&["-e", "-d", "900"]).unwrap().duration, 900);
+        assert_eq!(parse(&["-e", "-d", "129600"]).unwrap().duration, 129600);
+        assert!(parse(&["-e", "-d", "899"]).is_err());
+        assert!(parse(&["-e", "-d", "129601"]).is_err());
     }
 
     #[test]
-    fn test_get_code_without_code_in_test_mode() {
-        let mut args = Args::try_parse_from(["aws-mfa-session"]).unwrap();
-        assert_eq!(args.code, None);
-
-        // In test mode, get_code should set code to "123456"
-        args.get_code().unwrap();
-        assert_eq!(args.code, Some("123456".to_string()));
+    fn test_format_values() {
+        let format = |value: &str| parse(&["-e", "--format", value]).map(|args| args.format);
+        assert_eq!(
+            format("bash").unwrap(),
+            Some(ExportFormat::Shell(Shell::Bash))
+        );
+        assert_eq!(
+            format("zsh").unwrap(),
+            Some(ExportFormat::Shell(Shell::Zsh))
+        );
+        assert_eq!(format("sh").unwrap(), Some(ExportFormat::Shell(Shell::Sh)));
+        assert_eq!(
+            format("cmd").unwrap(),
+            Some(ExportFormat::Shell(Shell::Cmd))
+        );
+        assert_eq!(
+            format("powershell").unwrap(),
+            Some(ExportFormat::Shell(Shell::PowerShell))
+        );
+        assert_eq!(
+            format("pwsh").unwrap(),
+            Some(ExportFormat::Shell(Shell::PowerShell))
+        );
+        assert_eq!(format("json").unwrap(), Some(ExportFormat::Json));
+        assert!(format("yaml").is_err());
     }
 
     #[test]
-    fn test_get_code_preserves_existing_valid_code() {
-        let mut args = Args::try_parse_from(["aws-mfa-session", "--code", "999888"]).unwrap();
-        let original_code = args.code.clone();
-
-        args.get_code().unwrap();
-        assert_eq!(args.code, original_code);
+    fn test_format_lists_every_shell() {
+        for shell in Shell::ALL {
+            assert!(
+                ExportFormat::Shell(shell).to_possible_value().is_some(),
+                "{shell:?} has no --format value"
+            );
+        }
     }
 
     #[test]
-    fn test_ask_code_interactive_validation() {
-        // Test that the interactive code asking validates input
-        assert!(parse_code("123456").is_ok());
-        assert!(parse_code("abcdef").is_err());
-        assert!(parse_code("12345").is_err());
-        assert!(parse_code("1234567").is_err());
+    fn test_format_requires_export() {
+        let error = parse(&["-s", "--format", "json"]).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn test_force_requires_update_profile() {
+        let error = parse(&["-e", "--force"]).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+        assert!(parse(&["-u", "session", "--force"]).unwrap().force);
     }
 }

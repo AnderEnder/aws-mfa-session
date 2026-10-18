@@ -1,132 +1,187 @@
-use dirs::home_dir;
-use std::path::PathBuf;
+//! Reading and updating session profiles in the shared credentials file.
+
+use std::ops::Range;
+use std::path::Path;
 use std::time::Duration;
 use std::{fs, io};
+
 use tempfile::NamedTempFile;
 
-pub struct Profile {
-    pub name: String,
-    pub access_key_id: String,
-    pub secret_access_key: String,
-    pub session_token: Option<String>,
-    pub region: Option<String>,
+use crate::session::{SessionCredentials, format_timestamp, parse_timestamp};
+
+/// Session credentials stored as a profile in the shared credentials file.
+pub struct SessionProfile<'a> {
+    pub name: &'a str,
+    pub credentials: &'a SessionCredentials,
+    pub region: Option<&'a str>,
 }
 
-impl Profile {
-    fn config_section_header(&self) -> String {
-        format!("[{}]", self.name)
-    }
+impl SessionProfile<'_> {
+    /// The profile's INI section, ending with a single newline.
+    ///
+    /// `expiration` is not an AWS setting (AWS tools ignore it); it records when
+    /// the session ends so that a later run can tell whether it is still valid.
+    pub fn section(&self) -> String {
+        let expiration = self.credentials.expiration.map(format_timestamp);
+        let entries = [
+            (
+                "aws_access_key_id",
+                Some(self.credentials.access_key_id.as_str()),
+            ),
+            (
+                "aws_secret_access_key",
+                Some(self.credentials.secret_access_key.as_str()),
+            ),
+            (
+                "aws_session_token",
+                Some(self.credentials.session_token.as_str()),
+            ),
+            ("region", self.region),
+            ("expiration", expiration.as_deref()),
+        ];
 
-    pub fn config_section(&self) -> String {
-        let mut result = self.config_section_header();
-        result.push('\n');
-        result.push_str("aws_access_key_id = ");
-        result.push_str(&self.access_key_id);
-
-        result.push('\n');
-        result.push_str("aws_secret_access_key = ");
-        result.push_str(&self.secret_access_key);
-
-        if let Some(ref session_token) = self.session_token {
-            result.push('\n');
-            result.push_str("aws_session_token = ");
-            result.push_str(session_token);
+        let mut section = format!("[{}]\n", self.name);
+        for (key, value) in entries {
+            if let Some(value) = value {
+                section.push_str(&format!("{key} = {value}\n"));
+            }
         }
-        if let Some(ref region) = self.region {
-            result.push('\n');
-            result.push_str("region = ");
-            result.push_str(region);
-        }
-
-        result.push('\n');
-        result
+        section
     }
 }
 
-/// Insert or replace `profile`'s section in an INI `config`, touching only the
-/// target section. Everything else — comments, ordering, spacing of other
-/// sections — is preserved byte-for-byte.
-///
-/// Section detection is line-based: a header is any line whose left-trimmed text
-/// starts with `[`, and the target section is the header line whose fully-trimmed
-/// text equals `[name]` exactly. This avoids the substring/prefix and
-/// `$`-expansion hazards of the previous regex-replacement approach.
-pub fn update_profile(config: &str, profile: &Profile) -> String {
-    let target = profile.config_section_header(); // "[name]"
-    let new_section = profile.config_section(); // ends with a single '\n'
+/// Read back the session credentials stored in the `[name]` profile, if it has
+/// a complete set.
+pub fn find_session(contents: &str, name: &str) -> Option<SessionCredentials> {
+    let lines: Vec<&str> = contents.split_inclusive('\n').collect();
+    let span = section_span(&lines, name)?;
+    let entries: Vec<(&str, &str)> = lines[span]
+        .iter()
+        .skip(1) // the header
+        .map(|line| line.trim())
+        .filter(|line| !line.starts_with(['#', ';']))
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, value)| (key.trim(), value.trim()))
+        .collect();
+    let get = |key: &str| {
+        entries
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, value)| value.to_string())
+    };
 
+    Some(SessionCredentials {
+        access_key_id: get("aws_access_key_id")?,
+        secret_access_key: get("aws_secret_access_key")?,
+        session_token: get("aws_session_token")?,
+        expiration: get("expiration").and_then(|value| parse_timestamp(&value)),
+    })
+}
+
+/// Insert or replace the `[name]` section of an INI `contents` with `section`,
+/// touching only the target section. Everything else — comments, ordering,
+/// spacing of other sections — is preserved byte-for-byte.
+pub fn replace_section(contents: &str, name: &str, section: &str) -> String {
     // Keep line endings attached so the untouched parts are rebuilt verbatim
     // (also handles "\r\n" since trimming removes the trailing '\r').
-    let lines: Vec<&str> = config.split_inclusive('\n').collect();
-    let is_header = |l: &str| l.trim_start().starts_with('[');
+    let lines: Vec<&str> = contents.split_inclusive('\n').collect();
 
-    match lines.iter().position(|l| l.trim() == target) {
-        Some(start) => {
-            // Span runs to the next section header (or EOF)...
-            let mut end = lines[start + 1..]
-                .iter()
-                .position(|l| is_header(l))
-                .map_or(lines.len(), |i| start + 1 + i);
-            // ...but trailing blank lines act as separators and stay put.
-            while end - 1 > start && lines[end - 1].trim().is_empty() {
-                end -= 1;
-            }
-
-            let mut out = String::with_capacity(config.len() + new_section.len());
-            for line in &lines[..start] {
-                out.push_str(line);
-            }
-            out.push_str(&new_section);
-            for line in &lines[end..] {
-                out.push_str(line);
-            }
+    match section_span(&lines, name) {
+        Some(span) => {
+            let mut out = String::with_capacity(contents.len() + section.len());
+            out.extend(lines[..span.start].iter().copied());
+            out.push_str(section);
+            out.extend(lines[span.end..].iter().copied());
             out
         }
-        None if config.is_empty() => new_section,
+        None if contents.is_empty() => section.to_owned(),
         None => {
             // Append after the existing content with exactly one blank-line separator.
-            let mut out = config.to_string();
+            let mut out = contents.to_owned();
             if !out.ends_with('\n') {
                 out.push('\n');
             }
             if !out.ends_with("\n\n") {
                 out.push('\n');
             }
-            out.push_str(&new_section);
+            out.push_str(section);
             out
         }
     }
 }
 
-pub const AWS_SHARED_CREDENTIALS_FILE: &str = "AWS_SHARED_CREDENTIALS_FILE";
+/// The lines of the `[name]` section: from its header up to the next section
+/// header, excluding trailing blank lines, which act as separators.
+///
+/// Section detection is line-based: a header is any line whose left-trimmed text
+/// starts with `[`, and the target section is the header line whose fully-trimmed
+/// text equals `[name]` exactly. This avoids the substring/prefix hazards of
+/// matching names inside other headers, values, or comments.
+fn section_span(lines: &[&str], name: &str) -> Option<Range<usize>> {
+    let header = format!("[{name}]");
+    let is_header = |line: &&str| line.trim_start().starts_with('[');
 
-// Get credentials file from environment variable or use system default
-// https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html
-// Linux or macOS: ~/.aws/credentials
-// Windows: "%UserProfile%\.aws\credentials"
-fn credential_file() -> io::Result<PathBuf> {
-    let file = match std::env::var(AWS_SHARED_CREDENTIALS_FILE) {
-        Ok(s) => PathBuf::from(s),
-        _ => {
-            let mut file =
-                home_dir().ok_or_else(|| io::Error::other("Cannot find home directory"))?;
-            file.push(".aws");
-            file.push("credentials");
-            file
-        }
-    };
-    Ok(file)
+    let start = lines.iter().position(|line| line.trim() == header)?;
+    let mut end = lines[start + 1..]
+        .iter()
+        .position(is_header)
+        .map_or(lines.len(), |i| start + 1 + i);
+    while end - 1 > start && lines[end - 1].trim().is_empty() {
+        end -= 1;
+    }
+    Some(start..end)
+}
+
+/// Read the credentials file; a missing file reads as empty.
+pub fn read(path: &Path) -> io::Result<String> {
+    match fs::read_to_string(path) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(String::new()),
+        result => result,
+    }
+}
+
+/// Write `profile` into the credentials file at `path`, creating the file (and
+/// its directory) if needed. The file is replaced atomically and left readable
+/// only by its owner.
+pub fn save(path: &Path, profile: &SessionProfile) -> io::Result<()> {
+    // A missing credentials file is a valid starting point (e.g. env-var-only
+    // auth, fresh setup): treat it as empty and create it below.
+    let contents = read(path)?;
+    let updated = replace_section(&contents, profile.name, &profile.section());
+
+    // Ensure the parent directory exists so the temp file can be created next to
+    // the target (required for an atomic same-filesystem rename). Only adjust
+    // permissions on a directory we create ourselves — never re-permission a
+    // pre-existing directory the user owns.
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    if !dir.as_os_str().is_empty() && !dir.exists() {
+        fs::create_dir_all(dir)?;
+        // We just created ~/.aws; tighten it to owner-only. Best-effort: the
+        // credentials file itself is forced to 0600 below regardless, so a
+        // failure to chmod the directory must not abort the credential write.
+        let _ = set_mode(dir, 0o700);
+    }
+
+    let temp_file = NamedTempFile::new_in(dir)?;
+    fs::write(temp_file.path(), updated)?;
+
+    // Enforce 0600 on the secret-bearing file rather than inheriting whatever
+    // permissions the original had (which may have been group/world readable).
+    // This is the critical protection, so its failure is propagated.
+    set_mode(temp_file.path(), 0o600)?;
+
+    persist_with_retry(temp_file, path)
 }
 
 /// Set the Unix permission bits of `path`. No-op on non-Unix platforms.
 #[cfg(unix)]
-fn set_mode(path: &std::path::Path, mode: u32) -> io::Result<()> {
+fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(path, fs::Permissions::from_mode(mode))
 }
 
 #[cfg(not(unix))]
-fn set_mode(_path: &std::path::Path, _mode: u32) -> io::Result<()> {
+fn set_mode(_path: &Path, _mode: u32) -> io::Result<()> {
     Ok(())
 }
 
@@ -180,7 +235,7 @@ where
 /// Atomically move `temp_file` onto `dest`, retrying transient Windows rename
 /// failures. The temp file is recovered from each failed attempt so the next one
 /// can reuse it.
-fn persist_with_retry(temp_file: NamedTempFile, dest: &std::path::Path) -> io::Result<()> {
+fn persist_with_retry(temp_file: NamedTempFile, dest: &Path) -> io::Result<()> {
     let mut slot = Some(temp_file);
     persist_retrying(
         || {
@@ -197,102 +252,143 @@ fn persist_with_retry(temp_file: NamedTempFile, dest: &std::path::Path) -> io::R
     )
 }
 
-pub fn update_credentials(profile: &Profile) -> io::Result<()> {
-    let file_path = credential_file()?;
-
-    // A missing credentials file is a valid starting point (e.g. env-var-only
-    // auth, fresh setup): treat it as empty and create it below.
-    let config = match fs::read_to_string(&file_path) {
-        Ok(config) => config,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e),
-    };
-    let updated_config = update_profile(&config, profile);
-
-    // Ensure the parent directory exists so the temp file can be created next to
-    // the target (required for an atomic same-filesystem rename). Only adjust
-    // permissions on a directory we create ourselves — never re-permission a
-    // pre-existing directory the user owns.
-    let temp_dir = file_path
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."));
-    if !temp_dir.as_os_str().is_empty() && !temp_dir.exists() {
-        fs::create_dir_all(temp_dir)?;
-        // We just created ~/.aws; tighten it to owner-only. Best-effort: the
-        // credentials file itself is forced to 0600 below regardless, so a
-        // failure to chmod the directory must not abort the credential write.
-        let _ = set_mode(temp_dir, 0o700);
-    }
-
-    let temp_file = NamedTempFile::new_in(temp_dir)?;
-    fs::write(temp_file.path(), updated_config)?;
-
-    // Enforce 0600 on the secret-bearing file rather than inheriting whatever
-    // permissions the original had (which may have been group/world readable).
-    // This is the critical protection, so its failure is propagated.
-    set_mode(temp_file.path(), 0o600)?;
-
-    persist_with_retry(temp_file, &file_path)?;
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
-    use serial_test::serial;
+    use crate::session::tests::{at, sample_credentials};
 
-    fn sample_profile(name: &str) -> Profile {
-        Profile {
-            name: name.to_string(),
-            access_key_id: "AKIATEST".to_string(),
-            secret_access_key: "secret".to_string(),
-            session_token: Some("token".to_string()),
-            region: Some("us-east-1".to_string()),
-        }
+    /// A minimal section like the ones in hand-written credentials files.
+    fn section(name: &str, key: &str, secret: &str) -> String {
+        format!("[{name}]\naws_access_key_id = {key}\naws_secret_access_key = {secret}\n")
+    }
+
+    fn new_section(name: &str) -> String {
+        section(name, "AACCCCEESSSSKKEEYY/NEW", "SEC123RET/NEW")
     }
 
     /// Assert the low 9 permission bits of `path`. No-op on non-Unix platforms.
     #[cfg(unix)]
-    fn assert_mode(path: &std::path::Path, expected: u32, msg: &str) {
+    fn assert_mode(path: &Path, expected: u32, msg: &str) {
         use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(path).unwrap().permissions().mode();
+        let mode = fs::metadata(path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, expected, "{msg}");
     }
 
     #[cfg(not(unix))]
-    fn assert_mode(_path: &std::path::Path, _expected: u32, _msg: &str) {}
+    fn assert_mode(_path: &Path, _expected: u32, _msg: &str) {}
 
     #[test]
-    fn test_update_profile_empty() {
-        let profile = Profile {
-            name: String::from("session-production"),
-            access_key_id: String::from("AACCCCEESSSSKKEEYY"),
-            secret_access_key: String::from("SEC123RET"),
-            session_token: None,
-            region: None,
+    fn test_section_with_all_fields() {
+        let credentials = sample_credentials();
+        let profile = SessionProfile {
+            name: "test-session",
+            credentials: &credentials,
+            region: Some("us-west-2"),
         };
-        // An empty config yields just the section (no leading blank lines).
-        let updated = update_profile("", &profile);
         assert_eq!(
-            updated,
-            r##"[session-production]
-aws_access_key_id = AACCCCEESSSSKKEEYY
-aws_secret_access_key = SEC123RET
-"##
-        )
+            profile.section(),
+            "[test-session]\n\
+             aws_access_key_id = ASIATEST\n\
+             aws_secret_access_key = secret\n\
+             aws_session_token = token\n\
+             region = us-west-2\n\
+             expiration = 2027-01-15T08:00:00Z\n"
+        );
     }
 
     #[test]
-    fn test_update_profile_append() {
-        let profile = Profile {
-            name: String::from("session-production"),
-            access_key_id: String::from("AACCCCEESSSSKKEEYY"),
-            secret_access_key: String::from("SEC123RET"),
-            session_token: None,
+    fn test_section_without_optional_fields() {
+        let credentials = SessionCredentials {
+            expiration: None,
+            ..sample_credentials()
+        };
+        let profile = SessionProfile {
+            name: "minimal",
+            credentials: &credentials,
             region: None,
         };
+        let section = profile.section();
+        assert!(section.ends_with("aws_session_token = token\n"));
+        assert!(!section.contains("region"));
+        assert!(!section.contains("expiration"));
+    }
 
+    #[test]
+    fn test_section_values_are_literal() {
+        // Regression: an earlier `Regex::replace` expanded `$1`/`${name}` in the
+        // replacement string, silently dropping characters. Values must be literal.
+        let credentials = SessionCredentials {
+            secret_access_key: "se$1cret".to_owned(),
+            session_token: "tok${en}".to_owned(),
+            ..sample_credentials()
+        };
+        let profile = SessionProfile {
+            name: "session",
+            credentials: &credentials,
+            region: Some("us-$0-1"),
+        };
+        let original = "[session]\naws_access_key_id = OLD\naws_secret_access_key = OLD\n";
+        let updated = replace_section(original, "session", &profile.section());
+        assert!(
+            updated.contains("aws_secret_access_key = se$1cret"),
+            "got:\n{updated}"
+        );
+        assert!(updated.contains("aws_session_token = tok${en}"));
+        assert!(updated.contains("region = us-$0-1"));
+    }
+
+    #[test]
+    fn test_find_session_round_trips_section() {
+        let credentials = sample_credentials();
+        let profile = SessionProfile {
+            name: "session",
+            credentials: &credentials,
+            region: Some("eu-west-1"),
+        };
+        let contents = format!("{}\n{}", section("default", "K", "S"), profile.section());
+        assert_eq!(find_session(&contents, "session"), Some(credentials));
+    }
+
+    #[test]
+    fn test_find_session_tolerates_formatting() {
+        let contents = "[other]\naws_session_token = WRONG\n\n\
+                        [session]\r\n\
+                        # a comment = not a value\r\n\
+                        aws_access_key_id=KEY\r\n\
+                        aws_secret_access_key   =   SECRET  \r\n\
+                        aws_session_token = TOKEN==\r\n\
+                        expiration = 2027-01-15T08:00:00Z\r\n";
+        let found = find_session(contents, "session").unwrap();
+        assert_eq!(found.access_key_id, "KEY");
+        assert_eq!(found.secret_access_key, "SECRET");
+        assert_eq!(found.session_token, "TOKEN==");
+        assert_eq!(found.expiration, Some(at(1_800_000_000)));
+    }
+
+    #[test]
+    fn test_find_session_requires_complete_credentials() {
+        // Long-term credentials have no session token, so they are not a session.
+        assert_eq!(find_session(&section("dev", "K", "S"), "dev"), None);
+        assert_eq!(find_session(&section("dev", "K", "S"), "missing"), None);
+        assert_eq!(find_session("", "dev"), None);
+    }
+
+    #[test]
+    fn test_find_session_with_unparsable_expiration() {
+        let contents = "[s]\naws_access_key_id = K\naws_secret_access_key = S\n\
+                        aws_session_token = T\nexpiration = soon\n";
+        assert_eq!(find_session(contents, "s").unwrap().expiration, None);
+    }
+
+    #[test]
+    fn test_replace_section_empty() {
+        // An empty config yields just the section (no leading blank lines).
+        let updated = replace_section("", "session-production", &new_section("session-production"));
+        assert_eq!(updated, new_section("session-production"));
+    }
+
+    #[test]
+    fn test_replace_section_append() {
         let original = r##"[default]
 aws_access_key_id = AACCCCEESSSSKKEEYY/DEFAULT
 aws_secret_access_key = SEC123RET/DEFAULT
@@ -303,7 +399,11 @@ aws_secret_access_key = SEC123RET/PROD
 "##;
 
         // Appended after the existing content with a single blank-line separator.
-        let updated = update_profile(original, &profile);
+        let updated = replace_section(
+            original,
+            "session-production",
+            &new_section("session-production"),
+        );
         assert_eq!(
             updated,
             r##"[default]
@@ -315,22 +415,14 @@ aws_access_key_id = AACCCCEESSSSKKEEYY/PROD
 aws_secret_access_key = SEC123RET/PROD
 
 [session-production]
-aws_access_key_id = AACCCCEESSSSKKEEYY
-aws_secret_access_key = SEC123RET
+aws_access_key_id = AACCCCEESSSSKKEEYY/NEW
+aws_secret_access_key = SEC123RET/NEW
 "##
         )
     }
 
     #[test]
-    fn test_update_profile_replace_first() {
-        let profile = Profile {
-            name: String::from("session-production"),
-            access_key_id: String::from("AACCCCEESSSSKKEEYY/NEW"),
-            secret_access_key: String::from("SEC123RET/NEW"),
-            session_token: None,
-            region: None,
-        };
-
+    fn test_replace_section_first() {
         let original = r##"[session-production]
 aws_access_key_id = AACCCCEESSSSKKEEYY/OLD
 aws_secret_access_key = SEC123RET/OLD
@@ -343,7 +435,11 @@ aws_secret_access_key = SEC123RET/DEFAULT
 aws_access_key_id = AACCCCEESSSSKKEEYY/PROD
 aws_secret_access_key = SEC123RET/PROD"##;
 
-        let updated = update_profile(original, &profile);
+        let updated = replace_section(
+            original,
+            "session-production",
+            &new_section("session-production"),
+        );
         assert_eq!(
             updated,
             r##"[session-production]
@@ -360,17 +456,7 @@ aws_secret_access_key = SEC123RET/PROD"##
         );
     }
 
-    #[test]
-    fn test_update_profile_replace_inside() {
-        let profile = Profile {
-            name: String::from("session-production"),
-            access_key_id: String::from("AACCCCEESSSSKKEEYY/NEW"),
-            secret_access_key: String::from("SEC123RET/NEW"),
-            session_token: None,
-            region: None,
-        };
-
-        let original = r##"[default]
+    const SESSION_INSIDE: &str = r##"[default]
 aws_access_key_id = AACCCCEESSSSKKEEYY/DEFAULT
 aws_secret_access_key = SEC123RET/DEFAULT
 
@@ -382,10 +468,7 @@ aws_secret_access_key = SEC123RET/OLD
 aws_access_key_id = AACCCCEESSSSKKEEYY/PROD
 aws_secret_access_key = SEC123RET/PROD"##;
 
-        let updated = update_profile(original, &profile);
-        assert_eq!(
-            updated,
-            r##"[default]
+    const SESSION_INSIDE_REPLACED: &str = r##"[default]
 aws_access_key_id = AACCCCEESSSSKKEEYY/DEFAULT
 aws_secret_access_key = SEC123RET/DEFAULT
 
@@ -395,21 +478,27 @@ aws_secret_access_key = SEC123RET/NEW
 
 [production]
 aws_access_key_id = AACCCCEESSSSKKEEYY/PROD
-aws_secret_access_key = SEC123RET/PROD"##
+aws_secret_access_key = SEC123RET/PROD"##;
+
+    #[test]
+    fn test_replace_section_inside() {
+        let updated = replace_section(
+            SESSION_INSIDE,
+            "session-production",
+            &new_section("session-production"),
         );
+        assert_eq!(updated, SESSION_INSIDE_REPLACED);
     }
 
     #[test]
-    fn test_update_profile_replace_last() {
-        let profile = Profile {
-            name: String::from("session-production"),
-            access_key_id: String::from("AACCCCEESSSSKKEEYY/NEW"),
-            secret_access_key: String::from("SEC123RET/NEW"),
-            session_token: None,
-            region: None,
-        };
+    fn test_replace_section_inside_is_idempotent() {
+        let section = new_section("session-production");
+        let once = replace_section(SESSION_INSIDE, "session-production", &section);
+        let twice = replace_section(&once, "session-production", &section);
+        assert_eq!(twice, SESSION_INSIDE_REPLACED);
+    }
 
-        let original = r##"[default]
+    const SESSION_LAST: &str = r##"[default]
 aws_access_key_id = AACCCCEESSSSKKEEYY/DEFAULT
 aws_secret_access_key = SEC123RET/DEFAULT
 
@@ -421,211 +510,40 @@ aws_secret_access_key = SEC123RET/PROD
 aws_access_key_id = AACCCCEESSSSKKEEYY/OLD
 aws_secret_access_key = SEC123RET/OLD"##;
 
+    const SESSION_LAST_REPLACED: &str = r##"[default]
+aws_access_key_id = AACCCCEESSSSKKEEYY/DEFAULT
+aws_secret_access_key = SEC123RET/DEFAULT
+
+[production]
+aws_access_key_id = AACCCCEESSSSKKEEYY/PROD
+aws_secret_access_key = SEC123RET/PROD
+
+[session-production]
+aws_access_key_id = AACCCCEESSSSKKEEYY/NEW
+aws_secret_access_key = SEC123RET/NEW
+"##;
+
+    #[test]
+    fn test_replace_section_last() {
         // Replacing the last section leaves a single trailing newline (no extra blank line).
-        let updated = update_profile(original, &profile);
-        assert_eq!(
-            updated,
-            r##"[default]
-aws_access_key_id = AACCCCEESSSSKKEEYY/DEFAULT
-aws_secret_access_key = SEC123RET/DEFAULT
-
-[production]
-aws_access_key_id = AACCCCEESSSSKKEEYY/PROD
-aws_secret_access_key = SEC123RET/PROD
-
-[session-production]
-aws_access_key_id = AACCCCEESSSSKKEEYY/NEW
-aws_secret_access_key = SEC123RET/NEW
-"##
+        let updated = replace_section(
+            SESSION_LAST,
+            "session-production",
+            &new_section("session-production"),
         );
+        assert_eq!(updated, SESSION_LAST_REPLACED);
     }
 
     #[test]
-    fn test_update_profile_replace_inside_double() {
-        let profile = Profile {
-            name: String::from("session-production"),
-            access_key_id: String::from("AACCCCEESSSSKKEEYY/NEW"),
-            secret_access_key: String::from("SEC123RET/NEW"),
-            session_token: None,
-            region: None,
-        };
-
-        let original = r##"[default]
-aws_access_key_id = AACCCCEESSSSKKEEYY/DEFAULT
-aws_secret_access_key = SEC123RET/DEFAULT
-
-[session-production]
-aws_access_key_id = AACCCCEESSSSKKEEYY/OLD
-aws_secret_access_key = SEC123RET/OLD
-
-[production]
-aws_access_key_id = AACCCCEESSSSKKEEYY/PROD
-aws_secret_access_key = SEC123RET/PROD"##;
-
-        let updated_first = update_profile(original, &profile);
-        let updated = update_profile(&updated_first, &profile);
-        assert_eq!(
-            updated,
-            r##"[default]
-aws_access_key_id = AACCCCEESSSSKKEEYY/DEFAULT
-aws_secret_access_key = SEC123RET/DEFAULT
-
-[session-production]
-aws_access_key_id = AACCCCEESSSSKKEEYY/NEW
-aws_secret_access_key = SEC123RET/NEW
-
-[production]
-aws_access_key_id = AACCCCEESSSSKKEEYY/PROD
-aws_secret_access_key = SEC123RET/PROD"##
-        );
+    fn test_replace_section_last_is_idempotent() {
+        let section = new_section("session-production");
+        let once = replace_section(SESSION_LAST, "session-production", &section);
+        let twice = replace_section(&once, "session-production", &section);
+        assert_eq!(twice, SESSION_LAST_REPLACED);
     }
 
     #[test]
-    fn test_update_profile_replace_last_double() {
-        let profile = Profile {
-            name: String::from("session-production"),
-            access_key_id: String::from("AACCCCEESSSSKKEEYY/NEW"),
-            secret_access_key: String::from("SEC123RET/NEW"),
-            session_token: None,
-            region: None,
-        };
-
-        let original = r##"[default]
-aws_access_key_id = AACCCCEESSSSKKEEYY/DEFAULT
-aws_secret_access_key = SEC123RET/DEFAULT
-
-[production]
-aws_access_key_id = AACCCCEESSSSKKEEYY/PROD
-aws_secret_access_key = SEC123RET/PROD
-
-[session-production]
-aws_access_key_id = AACCCCEESSSSKKEEYY/OLD
-aws_secret_access_key = SEC123RET/OLD"##;
-
-        // Idempotent, and the last-section replace keeps a single trailing newline.
-        let updated_first = update_profile(original, &profile);
-        let updated = update_profile(&updated_first, &profile);
-        assert_eq!(
-            updated,
-            r##"[default]
-aws_access_key_id = AACCCCEESSSSKKEEYY/DEFAULT
-aws_secret_access_key = SEC123RET/DEFAULT
-
-[production]
-aws_access_key_id = AACCCCEESSSSKKEEYY/PROD
-aws_secret_access_key = SEC123RET/PROD
-
-[session-production]
-aws_access_key_id = AACCCCEESSSSKKEEYY/NEW
-aws_secret_access_key = SEC123RET/NEW
-"##
-        );
-    }
-
-    #[test]
-    fn test_profile_with_session_token() {
-        let profile = Profile {
-            name: String::from("test-session"),
-            access_key_id: String::from("AKIATEST"),
-            secret_access_key: String::from("secret123"),
-            session_token: Some(String::from("token456")),
-            region: Some(String::from("us-west-2")),
-        };
-
-        let config_section = profile.config_section();
-        assert!(config_section.contains("aws_access_key_id = AKIATEST"));
-        assert!(config_section.contains("aws_secret_access_key = secret123"));
-        assert!(config_section.contains("aws_session_token = token456"));
-        assert!(config_section.contains("region = us-west-2"));
-    }
-
-    #[test]
-    fn test_profile_without_optional_fields() {
-        let profile = Profile {
-            name: String::from("minimal-profile"),
-            access_key_id: String::from("AKIATEST"),
-            secret_access_key: String::from("secret123"),
-            session_token: None,
-            region: None,
-        };
-
-        let config_section = profile.config_section();
-        assert!(config_section.contains("aws_access_key_id = AKIATEST"));
-        assert!(config_section.contains("aws_secret_access_key = secret123"));
-        assert!(!config_section.contains("aws_session_token"));
-        assert!(!config_section.contains("region"));
-    }
-
-    #[test]
-    fn test_update_profile_with_special_characters() {
-        let profile = Profile {
-            name: String::from("special-chars"),
-            access_key_id: String::from("AKIA/TEST+KEY="),
-            secret_access_key: String::from("secret/with+special=chars"),
-            session_token: Some(String::from("token/with+special=chars")),
-            region: Some(String::from("us-east-1")),
-        };
-
-        let updated = update_profile("", &profile);
-        assert!(updated.contains("AKIA/TEST+KEY="));
-        assert!(updated.contains("secret/with+special=chars"));
-        assert!(updated.contains("token/with+special=chars"));
-    }
-
-    #[test]
-    fn test_update_profile_empty_values() {
-        let profile = Profile {
-            name: String::from("empty-test"),
-            access_key_id: String::from(""),
-            secret_access_key: String::from(""),
-            session_token: Some(String::from("")),
-            region: Some(String::from("")),
-        };
-
-        let updated = update_profile("", &profile);
-        assert!(updated.contains("[empty-test]"));
-        assert!(updated.contains("aws_access_key_id = "));
-        assert!(updated.contains("aws_secret_access_key = "));
-        assert!(updated.contains("aws_session_token = "));
-        assert!(updated.contains("region = "));
-    }
-
-    #[test]
-    #[serial]
-    fn test_credential_file_default_path() {
-        // Test that credential_file returns a path ending with .aws/credentials
-        // when AWS_SHARED_CREDENTIALS_FILE is not set
-        let file = credential_file().unwrap();
-        let path_str = file.to_string_lossy();
-
-        // Check that the path ends with .aws and credentials, accounting for different path separators
-        assert!(path_str.contains(".aws"));
-        assert!(path_str.ends_with("credentials"));
-
-        // On Unix-like systems, should end with .aws/credentials
-        // On Windows, should end with .aws\credentials
-        #[cfg(unix)]
-        assert!(path_str.ends_with(".aws/credentials"));
-
-        #[cfg(windows)]
-        assert!(path_str.ends_with(".aws\\credentials"));
-    }
-
-    #[test]
-    fn test_config_section_header() {
-        let profile = Profile {
-            name: String::from("test-profile"),
-            access_key_id: String::from("key"),
-            secret_access_key: String::from("secret"),
-            session_token: None,
-            region: None,
-        };
-
-        assert_eq!(profile.config_section_header(), "[test-profile]");
-    }
-
-    #[test]
-    fn test_update_profile_preserves_comments() {
+    fn test_replace_section_preserves_comments() {
         let original = "\
 # top comment
 [default]
@@ -637,18 +555,18 @@ aws_secret_access_key = DEFAULTSECRET
 aws_access_key_id = OLD
 aws_secret_access_key = OLD
 ";
-        let updated = update_profile(original, &sample_profile("session"));
+        let updated = replace_section(original, "session", &new_section("session"));
         // Untouched section (and its comments) survive byte-for-byte.
         assert!(updated.contains(
             "# top comment\n[default]\naws_access_key_id = DEFAULTKEY\n; keep this comment between keys\naws_secret_access_key = DEFAULTSECRET\n"
         ));
         // Target section was rewritten.
-        assert!(updated.contains("[session]\naws_access_key_id = AKIATEST\n"));
+        assert!(updated.contains("[session]\naws_access_key_id = AACCCCEESSSSKKEEYY/NEW\n"));
         assert!(!updated.contains("aws_access_key_id = OLD"));
     }
 
     #[test]
-    fn test_update_profile_prefix_names_dont_collide() {
+    fn test_replace_section_prefix_names_dont_collide() {
         let original = "\
 [prod]
 aws_access_key_id = PRODKEY
@@ -658,8 +576,8 @@ aws_secret_access_key = PRODSECRET
 aws_access_key_id = PRODUCTIONKEY
 aws_secret_access_key = PRODUCTIONSECRET
 ";
-        let updated = update_profile(original, &sample_profile("prod"));
-        assert!(updated.contains("[prod]\naws_access_key_id = AKIATEST\n"));
+        let updated = replace_section(original, "prod", &new_section("prod"));
+        assert!(updated.contains("[prod]\naws_access_key_id = AACCCCEESSSSKKEEYY/NEW\n"));
         // [production] must be untouched even though [prod] is a prefix of it.
         assert!(updated.contains(
             "[production]\naws_access_key_id = PRODUCTIONKEY\naws_secret_access_key = PRODUCTIONSECRET\n"
@@ -668,124 +586,121 @@ aws_secret_access_key = PRODUCTIONSECRET
     }
 
     #[test]
-    fn test_update_profile_comment_mentioning_section_is_not_a_header() {
+    fn test_replace_section_comment_mentioning_section_is_not_a_header() {
         // A comment that merely mentions [session] must not be treated as the
-        // section header (the old `config.contains()` check had this bug).
+        // section header (an earlier `config.contains()` check had this bug).
         let original = "\
 # remember to rotate [session] keys
 [default]
 aws_access_key_id = DEFAULTKEY
 aws_secret_access_key = DEFAULTSECRET
 ";
-        let updated = update_profile(original, &sample_profile("session"));
+        let updated = replace_section(original, "session", &new_section("session"));
         assert!(updated.contains("# remember to rotate [session] keys"));
         // The profile is appended; the only real `[session]` header is the new one.
         assert_eq!(updated.matches("[session]\n").count(), 1);
-        assert!(updated.trim_end().ends_with("region = us-east-1"));
+        assert!(updated.ends_with(&new_section("session")));
     }
 
     #[test]
-    fn test_update_profile_dollar_is_literal_not_capture_ref() {
-        // Regression: the previous `Regex::replace` expanded `$1`/`${name}` in the
-        // replacement string, silently dropping characters. Values must be literal.
-        let profile = Profile {
-            name: "session".to_string(),
-            access_key_id: "AKIATEST".to_string(),
-            secret_access_key: "se$1cret".to_string(),
-            session_token: Some("tok${en}".to_string()),
-            region: Some("us-$0-1".to_string()),
-        };
-        let original = "[session]\naws_access_key_id = OLD\naws_secret_access_key = OLD\n";
-        let updated = update_profile(original, &profile);
-        assert!(
-            updated.contains("aws_secret_access_key = se$1cret"),
-            "got:\n{updated}"
-        );
-        assert!(updated.contains("aws_session_token = tok${en}"));
-        assert!(updated.contains("region = us-$0-1"));
-    }
-
-    #[test]
-    fn test_update_profile_replace_last_without_trailing_newline() {
+    fn test_replace_section_last_without_trailing_newline() {
         let original = "[default]\naws_access_key_id = D\n\n[session]\naws_access_key_id = OLD\naws_secret_access_key = OLD";
-        let updated = update_profile(original, &sample_profile("session"));
-        assert!(updated.contains("[default]\naws_access_key_id = D\n"));
-        assert!(updated.contains("[session]\naws_access_key_id = AKIATEST\n"));
-        assert!(!updated.contains("OLD"));
-        assert!(updated.ends_with("region = us-east-1\n"));
+        let updated = replace_section(original, "session", &new_section("session"));
+        assert_eq!(
+            updated,
+            format!(
+                "[default]\naws_access_key_id = D\n\n{}",
+                new_section("session")
+            )
+        );
     }
 
     #[test]
-    fn test_update_profile_bracket_in_value_does_not_split_section() {
+    fn test_replace_section_bracket_in_value_does_not_split_section() {
         // A `[` that is not at the start of a line is not a section boundary, so
         // the span scan must run past it to the real next header ([session]).
         let original = "[default]\naws_access_key_id = OLDKEY\nnote = see [archive] dump\naws_secret_access_key = OLDSECRET\n\n[session]\naws_access_key_id = KEEP\n";
-        let updated = update_profile(original, &sample_profile("default"));
+        let updated = replace_section(original, "default", &new_section("default"));
         // [default] replaced wholesale (note line gone); [session] untouched.
         assert!(!updated.contains("note = see [archive] dump"));
         assert!(!updated.contains("OLDKEY"));
-        assert!(updated.contains("[default]\naws_access_key_id = AKIATEST\n"));
+        assert!(updated.contains("[default]\naws_access_key_id = AACCCCEESSSSKKEEYY/NEW\n"));
         assert!(updated.contains("[session]\naws_access_key_id = KEEP\n"));
     }
 
     #[test]
-    fn test_update_profile_handles_crlf_in_untouched_sections() {
+    fn test_replace_section_handles_crlf_in_untouched_sections() {
         let original =
             "[default]\r\naws_access_key_id = D\r\n\r\n[session]\r\naws_access_key_id = OLD\r\n";
-        let updated = update_profile(original, &sample_profile("session"));
+        let updated = replace_section(original, "session", &new_section("session"));
         // CRLF content outside the target is preserved verbatim.
         assert!(updated.contains("[default]\r\naws_access_key_id = D\r\n"));
-        assert!(updated.contains("[session]\naws_access_key_id = AKIATEST\n"));
+        assert!(updated.contains("[session]\naws_access_key_id = AACCCCEESSSSKKEEYY/NEW\n"));
         assert!(!updated.contains("OLD"));
     }
 
     #[test]
-    fn test_update_profile_append_then_replace_is_idempotent() {
+    fn test_replace_section_append_then_replace_is_idempotent() {
         let base = "[default]\naws_access_key_id = D\naws_secret_access_key = S\n";
-        let once = update_profile(base, &sample_profile("session"));
-        let twice = update_profile(&once, &sample_profile("session"));
+        let once = replace_section(base, "session", &new_section("session"));
+        let twice = replace_section(&once, "session", &new_section("session"));
         assert_eq!(once, twice);
         assert!(twice.contains("[default]\naws_access_key_id = D\n"));
         assert_eq!(twice.matches("[session]\n").count(), 1);
     }
 
-    #[test]
-    #[serial]
-    fn test_update_credentials_creates_missing_file() {
-        let dir = tempfile::tempdir().unwrap();
-        // Parent directory does not exist yet either.
-        let path = dir.path().join("nested").join("credentials");
-        assert!(!path.exists());
-
-        unsafe { std::env::set_var(AWS_SHARED_CREDENTIALS_FILE, &path) };
-        let result = update_credentials(&sample_profile("session"));
-        unsafe { std::env::remove_var(AWS_SHARED_CREDENTIALS_FILE) };
-        result.unwrap();
-
-        let written = std::fs::read_to_string(&path).unwrap();
-        assert!(written.contains("[session]"));
-        assert!(written.contains("aws_access_key_id = AKIATEST"));
-
-        assert_mode(&path, 0o600, "newly created credentials file must be 0600");
+    fn save_sample(path: &Path) -> io::Result<()> {
+        let credentials = sample_credentials();
+        save(
+            path,
+            &SessionProfile {
+                name: "session",
+                credentials: &credentials,
+                region: Some("us-east-1"),
+            },
+        )
     }
 
     #[test]
-    #[serial]
-    fn test_update_credentials_enforces_0600_permissions() {
+    fn test_read_missing_file_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(read(&dir.path().join("credentials")).unwrap(), "");
+    }
+
+    #[test]
+    fn test_save_creates_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        // Parent directory does not exist yet either.
+        let path = dir.path().join("nested").join("credentials");
+        save_sample(&path).unwrap();
+
+        let written = fs::read_to_string(&path).unwrap();
+        assert!(written.starts_with("[session]\naws_access_key_id = ASIATEST\n"));
+        assert_eq!(
+            find_session(&written, "session"),
+            Some(sample_credentials())
+        );
+
+        assert_mode(&path, 0o600, "newly created credentials file must be 0600");
+        assert_mode(
+            path.parent().unwrap(),
+            0o700,
+            "a created directory is owner-only",
+        );
+    }
+
+    #[test]
+    fn test_save_enforces_0600_permissions() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("credentials");
-        std::fs::write(&path, "[existing]\naws_access_key_id = OLD\n").unwrap();
+        fs::write(&path, "[existing]\naws_access_key_id = OLD\n").unwrap();
         set_mode(&path, 0o644).unwrap();
 
-        unsafe { std::env::set_var(AWS_SHARED_CREDENTIALS_FILE, &path) };
-        let result = update_credentials(&sample_profile("session"));
-        unsafe { std::env::remove_var(AWS_SHARED_CREDENTIALS_FILE) };
-        result.unwrap();
+        save_sample(&path).unwrap();
 
-        let written = std::fs::read_to_string(&path).unwrap();
+        let written = fs::read_to_string(&path).unwrap();
         assert!(written.contains("[existing]")); // pre-existing content preserved
         assert!(written.contains("[session]")); // new profile appended
-
         assert_mode(
             &path,
             0o600,
@@ -794,17 +709,13 @@ aws_secret_access_key = DEFAULTSECRET
     }
 
     #[test]
-    #[serial]
-    fn test_update_credentials_does_not_repermission_existing_dir() {
+    fn test_save_does_not_repermission_existing_dir() {
         let dir = tempfile::tempdir().unwrap();
         // The parent directory already exists with perms the tool must not change.
         set_mode(dir.path(), 0o755).unwrap();
         let path = dir.path().join("credentials");
 
-        unsafe { std::env::set_var(AWS_SHARED_CREDENTIALS_FILE, &path) };
-        let result = update_credentials(&sample_profile("session"));
-        unsafe { std::env::remove_var(AWS_SHARED_CREDENTIALS_FILE) };
-        result.unwrap();
+        save_sample(&path).unwrap();
 
         assert_mode(
             dir.path(),

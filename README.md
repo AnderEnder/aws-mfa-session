@@ -14,8 +14,10 @@ A command line utility to generate temporary AWS credentials using virtual MFA d
 * Generate temporary credentials using AWS STS
 * **Enhanced error reporting** with detailed error messages
 * **Atomic credentials file updates** - the file is replaced via an atomic rename, preventing partial/torn writes
+* **Session reuse** - a session profile that is still valid is reused instead of asking for a new MFA code
 * Multiple output options:
-  * Export as environment variables
+  * Export as environment variables for bash, zsh, sh, fish, cmd or PowerShell
+  * Export as `credential_process` JSON
   * Launch new shell with credentials
   * Update/create profiles in AWS credentials file
 
@@ -69,7 +71,7 @@ mfa_serial = GAHT12345678
 
 ### Interactive MFA Code Entry
 
-If you don't provide the `--code` argument, you'll be prompted to enter it interactively:
+If you don't provide the `--code` argument, you'll be prompted to enter it interactively. The prompt appears only after your long-term credentials have been checked, so a misconfiguration is reported before you reach for your MFA device:
 
 ```sh
 # Interactive mode - you'll be prompted for the MFA code
@@ -99,7 +101,36 @@ aws-mfa-session --code 123456 --export
 
 Could be used to inject variables into the current shell:
 ```sh
-eval $(aws-mfa-session --code 464899 --export)
+# bash, zsh, sh
+eval "$(aws-mfa-session --code 464899 --export)"
+
+# fish
+aws-mfa-session --code 464899 --export | source
+
+# PowerShell
+aws-mfa-session --code 464899 --export --format powershell | Out-String | Invoke-Expression
+```
+
+The output format is detected from the `SHELL` environment variable. Use `--format` to choose it explicitly, for example on Windows, where `SHELL` is usually not set:
+
+```sh
+aws-mfa-session --code 123456 --export --format powershell
+```
+
+Print the credentials as JSON, in the format used by the AWS CLI's [`credential_process`](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sourcing-external.html):
+
+```sh
+aws-mfa-session --code 123456 --export --format json
+```
+
+```json
+{
+  "Version": 1,
+  "AccessKeyId": "ASIAIOSFODNN7EXAMPLE",
+  "SecretAccessKey": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+  "SessionToken": "AQoEXAMPLE...",
+  "Expiration": "2026-10-18T15:04:05Z"
+}
 ```
 
 ### Advanced Usage
@@ -127,6 +158,17 @@ Generate session credentials with default profile, and create or update a new pr
 ```sh
 aws-mfa-session --update-profile mfa-session --code 123456
 ```
+
+The profile records when the session expires (in an `expiration` key, which AWS tools ignore). While it has at least 15 minutes left, running the command again reuses it without asking for an MFA code — so it is safe to run at the start of every working session. Pass `--force` to request new credentials anyway, for example to switch the source `--profile` or get a longer `--duration`:
+
+```sh
+aws-mfa-session --update-profile mfa-session
+Reusing profile 'mfa-session', valid until 2026-10-18T15:04:05Z (5h 12m left). Pass --force to renew it.
+
+aws-mfa-session --update-profile mfa-session --force
+```
+
+A reused profile also feeds `--export` and `--shell`, so `aws-mfa-session -u mfa-session -e` prints the saved credentials while they are valid and only asks for a code once they are not.
 
 Generate session credentials with defined profile, and create or update a new profile:
 
@@ -258,38 +300,42 @@ role_session_policy = {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Ac
 
 ### Shell-Specific Output Examples
 
-The tool automatically detects your shell and formats output appropriately:
+The tool detects your shell from `SHELL` (or uses `--format`) and formats output appropriately. `AWS_CREDENTIAL_EXPIRATION` is read by some AWS SDKs and prompt themes:
 
-**Bash/Zsh/Sh output:**
+**Bash/Sh output** (zsh uses `%#` in the prompt instead of `\$`):
 ```sh
-export AWS_ACCESS_KEY_ID='AKIAIOSFODNN7EXAMPLE'
+export AWS_ACCESS_KEY_ID='ASIAIOSFODNN7EXAMPLE'
 export AWS_SECRET_ACCESS_KEY='wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'
 export AWS_SESSION_TOKEN='AQoEXAMPLE...'
+export AWS_CREDENTIAL_EXPIRATION='2026-10-18T15:04:05Z'
 export PS1='AWS:user@123456789012 \$ '
 ```
 
 **Fish shell output:**
 ```fish
-set -x AWS_ACCESS_KEY_ID "AKIAIOSFODNN7EXAMPLE"
-set -x AWS_SECRET_ACCESS_KEY "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-set -x AWS_SESSION_TOKEN "AQoEXAMPLE..."
-set -x PS1 "AWS:user@123456789012 \$ "
+set -gx AWS_ACCESS_KEY_ID 'ASIAIOSFODNN7EXAMPLE'
+set -gx AWS_SECRET_ACCESS_KEY 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'
+set -gx AWS_SESSION_TOKEN 'AQoEXAMPLE...'
+set -gx AWS_CREDENTIAL_EXPIRATION '2026-10-18T15:04:05Z'
+function fish_prompt; echo -n 'AWS:user@123456789012> '; end
 ```
 
 **CMD output:**
 ```cmd
-set "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"
+set "AWS_ACCESS_KEY_ID=ASIAIOSFODNN7EXAMPLE"
 set "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 set "AWS_SESSION_TOKEN=AQoEXAMPLE..."
-set "PROMPT=AWS:user@123456789012 \$ "
+set "AWS_CREDENTIAL_EXPIRATION=2026-10-18T15:04:05Z"
+set "PROMPT=AWS:user@123456789012$G "
 ```
 
 **PowerShell output:**
 ```powershell
-Set-Variable -Name "AWS_ACCESS_KEY_ID" -Value "AKIAIOSFODNN7EXAMPLE"
-Set-Variable -Name "AWS_SECRET_ACCESS_KEY" -Value "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-Set-Variable -Name "AWS_SESSION_TOKEN" -Value "AQoEXAMPLE..."
-function prompt { "AWS:user@123456789012 \$ " }
+$env:AWS_ACCESS_KEY_ID = 'ASIAIOSFODNN7EXAMPLE'
+$env:AWS_SECRET_ACCESS_KEY = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'
+$env:AWS_SESSION_TOKEN = 'AQoEXAMPLE...'
+$env:AWS_CREDENTIAL_EXPIRATION = '2026-10-18T15:04:05Z'
+function global:prompt { 'AWS:user@123456789012> ' }
 ```
 
 ## Installation
@@ -325,7 +371,7 @@ cargo install --path .
 ## Usage
 
 ```
-Usage: aws-mfa-session [OPTIONS]
+Usage: aws-mfa-session [OPTIONS] <--shell|--export|--update-profile <SESSION_PROFILE>>
 
 Options:
   -p, --profile <PROFILE>
@@ -335,19 +381,25 @@ Options:
   -r, --region <REGION>
           AWS region. AWS_REGION is used if not defined
   -c, --code <CODE>
-          MFA code from MFA resource
+          MFA code from MFA resource. Prompted for when not provided
   -a, --arn <ARN>
-          MFA device ARN from user profile. It could be detected automatically
+          MFA device ARN. If not provided, will try to read mfa_serial from AWS profile configuration, then fall back to automatic detection
   -d, --duration <DURATION>
           Session duration in seconds (900-129600) [default: 3600]
   -s, --shell
           Run shell with AWS credentials as environment variables
   -e, --export
           Print(export) AWS credentials as environment variables
+      --format <FORMAT>
+          Output format for --export. Detected from SHELL if not defined [possible values: bash, zsh, sh, fish, cmd, powershell, json]
   -u, --update-profile <SESSION_PROFILE>
-          Update AWS credential profile with temporary session credentials
+          Update AWS credential profile with temporary session credentials. A profile that is still valid is reused
+      --force
+          Request new credentials even if the --update-profile profile is still valid
   -h, --help
           Print help
+  -V, --version
+          Print version
 ```
 
 ## Security Features
@@ -364,12 +416,13 @@ Options:
 The application automatically detects your shell and formats output accordingly:
 
 * **Unix/Linux shells**: Bash, Zsh, Sh, Fish
-  - Sets `AWS_*` environment variables and `PS1` prompt
-  - Proper quote escaping for special characters
+  - Bash/Zsh/Sh: sets `AWS_*` environment variables and the `PS1` prompt
+  - Fish: sets global exported variables and a `fish_prompt` function
+  - Values are single-quoted using each shell's own escaping rules
 * **Windows shells**: CMD, PowerShell
   - CMD: Uses `set` commands and `PROMPT` variable
-  - PowerShell: Uses `Set-Variable` and custom `prompt` function
-  - Case-insensitive shell detection
+  - PowerShell: Sets `$env:` environment variables (visible to the AWS CLI and other child processes) and a `prompt` function
+* Detection uses the file name of `SHELL`, case-insensitively; override it with `--format`
 
 ## Error Handling
 
@@ -379,6 +432,6 @@ The application provides detailed error messages with enhanced reporting using `
 * **AWS service errors**: Authentication failures, missing MFA devices, STS token errors
 * **File operation errors**: Permission issues, file corruption prevention
 * **Network errors**: Connectivity issues, timeout handling
-* **Interactive errors**: TTY detection for MFA code prompting
+* **Interactive errors**: TTY detection for MFA code prompting; an invalid code is asked for again
 
-All errors include helpful context and suggestions for resolution.
+Errors name the AWS operation that failed and, where it helps, suggest a fix. For more detail when reporting a problem, set `RUST_LOG`, for example `RUST_LOG=aws_mfa_session=debug`; diagnostics are written to stderr, so they never mix with exported credentials.

@@ -1,26 +1,17 @@
 use aws_mfa_session::{Args, run};
 use clap::Parser;
-use std::process::exit;
-use tracing_subscriber::{EnvFilter, fmt};
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
-async fn main() {
-    let mut opts = Args::parse();
+async fn main() -> miette::Result<()> {
+    // Diagnostics are off unless requested with RUST_LOG, and go to stderr so
+    // they never mix with the credentials printed by --export.
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("off"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .init();
 
-    // Configure tracing
-    let level = "off";
-    let filter = EnvFilter::try_new(level).unwrap_or_else(|_| EnvFilter::new("info"));
-    fmt().with_env_filter(filter).init();
-
-    if let Err(e) = opts.get_code() {
-        tracing::error!(?e, "application error");
-        // Report the error once, as a fancy miette diagnostic.
-        eprintln!("{}", miette::Report::new(e));
-        exit(1);
-    }
-
-    if let Err(e) = run(opts).await {
-        eprintln!("Error: {e}");
-        exit(1);
-    }
+    run(Args::parse()).await?;
+    Ok(())
 }
