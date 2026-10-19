@@ -14,21 +14,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Cache cargo
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            ~/.cargo/git
-            target
-          key: clippy-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - name: Install clippy
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - name: cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: clippy
       - name: clippy check
         run: cargo clippy --all-targets --all-features -- -D warnings
   fmt:

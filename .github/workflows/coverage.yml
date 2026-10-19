@@ -14,19 +14,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v7
-    - name: Cache cargo
-      uses: actions/cache@v6
+    - name: cache
+      uses: Swatinem/rust-cache@v2
       with:
-        path: |
-          ~/.cargo/bin/
-          ~/.cargo/registry/index/
-          ~/.cargo/registry/cache/
-          ~/.cargo/git/db/
-          ~/.cargo/git
-          target
-        key: coverage-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        shared-key: coverage
     - name: Install cargo-tarpaulin
-      uses: taiki-e/install-action@v2.85.6
+      uses: taiki-e/install-action@v2.87.29
       with:
         tool: cargo-tarpaulin
     - name: Run coverage

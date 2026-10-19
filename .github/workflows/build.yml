@@ -1,0 +1,158 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - "*"
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (${{ matrix.target || matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+          - os: ubuntu-24.04-arm
+          - os: macos-latest
+          - os: windows-latest
+          - os: windows-11-arm
+          # Intel macOS, cross-compiled on Apple Silicon and tested under
+          # Rosetta 2: the Intel runners are several times slower.
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            arch: x86_64
+            cargo-args: --target x86_64-apple-darwin
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7
+      - name: toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.target || matrix.os }}
+      - name: install Rosetta 2
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: arch -x86_64 /usr/bin/true 2>/dev/null || sudo softwareupdate --install-rosetta --agree-to-license
+      - name: build
+        run: cargo build --verbose ${{ matrix.cargo-args }}
+      - name: check architecture
+        if: matrix.target
+        run: |
+          bin=target/${{ matrix.target }}/debug/aws-mfa-session
+          lipo -archs "$bin"
+          test "$(lipo -archs "$bin")" = "${{ matrix.arch }}"
+      - name: test
+        run: cargo test --no-fail-fast --verbose ${{ matrix.cargo-args }} -- --nocapture
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LOG: trace
+
+  msrv:
+    # Verifies the rust-version declared in Cargo.toml still builds, and flags
+    # drift when an AWS SDK dependency raises its MSRV.
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7
+      - name: toolchain (1.94.1)
+        uses: dtolnay/rust-toolchain@1.94.1
+      - name: cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: msrv
+      - name: cargo check on MSRV
+        run: cargo check --locked --all-targets
+
+  # The cross-compiled release binaries, built the same way as in release.yml.
+  cross-compile:
+    name: cross-compile (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            zig-target: x86_64-unknown-linux-musl
+          - target: aarch64-unknown-linux-musl
+            zig-target: aarch64-unknown-linux-musl
+          - target: x86_64-unknown-linux-gnu
+            zig-target: x86_64-unknown-linux-gnu.2.17
+          - target: aarch64-unknown-linux-gnu
+            zig-target: aarch64-unknown-linux-gnu.2.17
+          - target: x86_64-unknown-freebsd
+            zig-target: x86_64-unknown-freebsd
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7
+      - name: toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.target }}
+      - name: install zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: install cargo-zigbuild
+        uses: taiki-e/install-action@cargo-zigbuild
+      - name: build
+        run: cargo zigbuild --locked --target ${{ matrix.zig-target }}
+      - name: check linkage
+        run: |
+          bin=target/${{ matrix.target }}/debug/aws-mfa-session
+          file "$bin"
+          case "${{ matrix.target }}" in
+            *-musl)
+              file "$bin" | grep -Eq "statically linked|static-pie linked"
+              ;;
+            *-gnu)
+              newest=$(readelf -W --dyn-syms "$bin" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+              echo "newest glibc symbol version: $newest"
+              test "$(printf '%s\n' GLIBC_2.17 "$newest" | sort -V | tail -1)" = GLIBC_2.17
+              ;;
+          esac
+      - name: smoke test
+        if: startsWith(matrix.target, 'x86_64-unknown-linux')
+        run: target/${{ matrix.target }}/debug/aws-mfa-session --version
+      - name: upload FreeBSD binary
+        if: matrix.target == 'x86_64-unknown-freebsd'
+        uses: actions/upload-artifact@v7
+        with:
+          name: aws-mfa-session-x86_64-unknown-freebsd
+          path: target/x86_64-unknown-freebsd/debug/aws-mfa-session
+          retention-days: 1
+
+  freebsd-smoke-test:
+    needs: cross-compile
+    runs-on: ubuntu-latest
+    steps:
+      - name: download FreeBSD binary
+        uses: actions/download-artifact@v8
+        with:
+          name: aws-mfa-session-x86_64-unknown-freebsd
+      - name: run on FreeBSD 14
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "14"
+          copyback: false
+          run: |
+            chmod +x aws-mfa-session
+            ./aws-mfa-session --version
+            # Starts the runtime and the SDK, then fails to connect before
+            # asking for an MFA code.
+            AWS_ACCESS_KEY_ID=a AWS_SECRET_ACCESS_KEY=b AWS_REGION=us-east-1 \
+              AWS_ENDPOINT_URL=http://127.0.0.1:1 AWS_MAX_ATTEMPTS=1 NO_COLOR=1 \
+              ./aws-mfa-session --update-profile smoke --credentials-file ./credentials 2>&1 \
+              | grep "GetCallerIdentity failed"
