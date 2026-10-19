@@ -21,6 +21,8 @@ use crate::shell::Shell;
             .multiple(true)
             .args(["shell", "export", "session_profile"])
     ),
+    // The outputs that receive the role's credentials with --role.
+    group(ArgGroup::new("role_output").multiple(true).args(["shell", "export"])),
 )]
 pub struct Args {
     /// AWS credential profile to use. AWS_PROFILE is used by default
@@ -59,6 +61,9 @@ pub struct Args {
     /// Request new credentials even if the --update-profile profile is still valid
     #[arg(long, requires = "session_profile")]
     pub force: bool,
+    /// Assume this role with the MFA session, and pass its credentials to --export and --shell: a role ARN, or a profile with role_arn. --update-profile keeps the MFA session
+    #[arg(long, value_name = "PROFILE|ARN", requires = "role_output")]
+    pub role: Option<String>,
 }
 
 /// AWS tools ignore profiles whose names use other characters, so reject them
@@ -125,6 +130,7 @@ mod tests {
         assert!(args.region.is_none());
         assert!(args.arn.is_none());
         assert!(args.session_profile.is_none());
+        assert!(args.role.is_none());
     }
 
     #[test]
@@ -311,6 +317,19 @@ mod tests {
             assert_eq!(error.kind(), ErrorKind::ValueValidation, "{name:?}");
             assert!(error.to_string().contains("ASCII letters"), "{error}");
         }
+    }
+
+    #[test]
+    fn test_role_requires_export_or_shell() {
+        assert_eq!(
+            parse(&["-e", "--role", "dev"]).unwrap().role.as_deref(),
+            Some("dev")
+        );
+        assert!(parse(&["-s", "-u", "session", "--role", "dev"]).is_ok());
+
+        // The role's credentials would have nowhere to go.
+        let error = parse(&["-u", "session", "--role", "dev"]).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
     }
 
     #[test]

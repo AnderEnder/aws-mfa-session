@@ -39,6 +39,19 @@ pub enum CliError {
     ))]
     MfaProcessOutput,
 
+    #[error("profile '{profile}' has no role_arn")]
+    #[diagnostic(help(
+        "set role_arn for the profile in ~/.aws/config, or pass the role ARN to --role"
+    ))]
+    NoRoleArn { profile: String },
+
+    #[error("profile '{profile}' has an invalid {key}: {value}")]
+    InvalidSetting {
+        profile: String,
+        key: &'static str,
+        value: String,
+    },
+
     #[error("AWS {operation} failed: {message}")]
     Aws {
         operation: &'static str,
@@ -127,6 +140,9 @@ mod tests {
             CliError::NoCredentialsFile,
             CliError::NoMfaDevice,
             CliError::MfaProcessOutput,
+            CliError::NoRoleArn {
+                profile: "dev".to_owned(),
+            },
         ] {
             assert!(error.help().is_some(), "{error} should explain the fix");
         }

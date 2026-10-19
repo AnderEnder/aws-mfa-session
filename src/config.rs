@@ -120,6 +120,9 @@ pub struct Config {
     pub duration_secs: i32,
     /// `--force`: never reuse the `--update-profile` session.
     pub force: bool,
+    /// `--role`: a role ARN, or a profile with `role_arn`, to assume with the
+    /// MFA session.
+    pub role: Option<String>,
     pub outputs: Outputs,
 }
 
@@ -174,6 +177,7 @@ impl Config {
             mfa_process: args.mfa_process,
             duration_secs: args.duration,
             force: args.force,
+            role: args.role,
             outputs,
         })
     }
@@ -368,6 +372,15 @@ pub(crate) mod tests {
         assert_eq!(config.duration_secs, 900);
         assert_eq!(config.sdk.region.as_deref(), Some("eu-west-1"));
         assert!(!config.force);
+        assert_eq!(config.role, None);
+        assert_eq!(
+            config_role(&["-e", "--role", "dev"]).as_deref(),
+            Some("dev")
+        );
+    }
+
+    fn config_role(arguments: &[&str]) -> Option<String> {
+        config(arguments, &home_env()).role
     }
 
     #[test]

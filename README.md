@@ -17,6 +17,7 @@ A command line utility to generate temporary AWS credentials using virtual MFA d
 * **Atomic credentials file updates** - the file is replaced via an atomic rename, preventing partial/torn writes
 * **Comment-preserving edits** - only the session profile's keys change; comments, formatting and other settings stay as they were (see [`aws-shared-config`](https://github.com/AnderEnder/aws-shared-config))
 * **Session reuse** - a session profile that is still valid is reused instead of asking for a new MFA code
+* **Assume roles** - `--role` assumes a role with the MFA session, so roles that require MFA need no extra code
 * Multiple output options:
   * Export as environment variables for bash, zsh, sh, fish, cmd or PowerShell
   * Export as `credential_process` JSON
@@ -282,11 +283,35 @@ aws s3 ls --profile dev-account
 aws ec2 describe-instances --profile prod-account
 ```
 
+#### Role Credentials in the Environment or a Shell
+
+`--role` assumes a role with the MFA session and passes the role's credentials to `--export` and `--shell`, for tools that read credentials from the environment:
+
+```sh
+# Start a shell as the dev-account role
+aws-mfa-session --profile mycompany --update-profile mycompany-session --role dev-account --shell
+
+# Or export the role's credentials; a role ARN works too
+eval "$(aws-mfa-session --profile mycompany --update-profile mycompany-session --role arn:aws:iam::222222222222:role/AdminRole --export)"
+```
+
+- The MFA session works as before: `--update-profile` keeps it, and while it is valid no MFA code is asked for. The role is assumed with it every run, and its credentials are not saved.
+- The session carries your MFA authentication, so roles whose trust policy requires MFA accept it.
+- From a role profile, `role_arn`, `role_session_name` (default `aws-mfa-session`), `external_id`, `duration_seconds` and the session policies below are read; its `source_profile` and `mfa_serial` are not used.
+- The shell prompt shows the role, e.g. `AWS:AdminRole@222222222222`.
+
 #### Readonly Assume Role Profiles
 
-AWS CLI supports session policies that restrict permissions when assuming a role. This is useful for creating "readonly" variants of your profiles that limit what actions can be performed, even if the underlying role has broader permissions.
+Session policies restrict permissions when assuming a role. This is useful for creating "readonly" variants of your profiles that limit what actions can be performed, even if the underlying role has broader permissions.
 
-Use `role_session_policy_arns` to attach AWS managed policies:
+> [!WARNING]
+> `role_session_policy_arns` and `role_session_policy` are applied only by `aws-mfa-session --role`. The AWS CLI and SDKs do not know these settings and ignore them, so `aws --profile dev-account-readonly` gets the role's **full** permissions. Use these profiles through `--role`:
+>
+> ```sh
+> aws-mfa-session --profile mycompany --update-profile mycompany-session --role dev-account-readonly --shell
+> ```
+
+Use `role_session_policy_arns` to attach AWS managed policies (several are separated by commas):
 
 ```ini
 [profile dev-account-readonly]
@@ -327,7 +352,7 @@ role_arn = arn:aws:iam::222222222222:role/AdminRole
 role_session_policy = {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:Get*","s3:List*"],"Resource":"*"}]}
 ```
 
-**Note:** `role_session_policy_arns` requires AWS CLI v2.15.0 or later.
+The policy must stay on one line.
 
 ### Shell-Specific Output Examples
 
