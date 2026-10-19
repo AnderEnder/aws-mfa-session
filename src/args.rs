@@ -51,11 +51,21 @@ pub struct Args {
     #[arg(long, requires = "export")]
     pub format: Option<ExportFormat>,
     /// Update AWS credential profile with temporary session credentials. A profile that is still valid is reused
-    #[arg(long = "update-profile", short = 'u')]
+    #[arg(long = "update-profile", short = 'u', value_parser = profile_name)]
     pub session_profile: Option<String>,
     /// Request new credentials even if the --update-profile profile is still valid
     #[arg(long, requires = "session_profile")]
     pub force: bool,
+}
+
+/// AWS tools ignore profiles whose names use other characters, so reject them
+/// before the MFA code is spent on a session that could not be saved.
+fn profile_name(name: &str) -> Result<String, &'static str> {
+    if !name.is_empty() && aws_shared_config::is_valid_identifier(name) {
+        Ok(name.to_owned())
+    } else {
+        Err("profile names may only use ASCII letters, digits and _-/.%@:+")
+    }
 }
 
 impl ValueEnum for ExportFormat {
@@ -265,6 +275,21 @@ mod tests {
     fn test_format_requires_export() {
         let error = parse(&["-s", "--format", "json"]).unwrap_err();
         assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn test_update_profile_name_must_be_valid() {
+        for name in ["dev", "team/dev", "a.b@c:d+e%f_g-h"] {
+            assert_eq!(
+                parse(&["-u", name]).unwrap().session_profile.as_deref(),
+                Some(name)
+            );
+        }
+        for name in ["", "my session", "dev]", "dev!"] {
+            let error = parse(&["-u", name]).unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::ValueValidation, "{name:?}");
+            assert!(error.to_string().contains("ASCII letters"), "{error}");
+        }
     }
 
     #[test]
