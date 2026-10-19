@@ -8,7 +8,7 @@ use crate::aws::AwsApi;
 use crate::config::{Config, ProfileTarget, SdkSettings};
 use crate::credentials::{self, SessionProfile};
 use crate::error::CliError;
-use crate::mfa;
+use crate::mfa::{self, MfaCode};
 use crate::profile;
 use crate::session::{Identity, SessionCredentials};
 use crate::shell::{Shell, ShellLaunch};
@@ -102,10 +102,7 @@ async fn renew(
     let identity = aws.caller_identity().await?;
     let device = mfa_device(config, aws).await?;
     // Asking only now means a time-based code is as fresh as possible.
-    let code = match &config.code {
-        Some(code) => code.clone(),
-        None => terminal.read_mfa_code()?,
-    };
+    let code = mfa_code(config, terminal)?;
     let credentials = aws
         .session_token(&device, &code, config.duration_secs)
         .await?;
@@ -140,15 +137,41 @@ async fn mfa_device(config: &Config, aws: &impl AwsApi) -> Result<String, CliErr
     if let Some(device) = &config.mfa_device {
         return Ok(device.clone());
     }
-    let configured = profile::mfa_serial(
-        config.config_file.as_deref(),
-        config.credentials_file.as_deref(),
-        &config.profile,
-    );
-    if let Some(device) = configured {
+    if let Some(device) = profile_setting(config, "mfa_serial") {
         return Ok(device);
     }
     mfa::select_device(aws.mfa_devices().await?).ok_or(CliError::NoMfaDevice)
+}
+
+/// The MFA code from `--code`, else printed by the `--mfa-process` command or
+/// the profile's `mfa_process`, else typed in by the user.
+fn mfa_code(config: &Config, terminal: &mut impl Terminal) -> Result<MfaCode, CliError> {
+    if let Some(code) = &config.code {
+        return Ok(code.clone());
+    }
+    let command = config
+        .mfa_process
+        .clone()
+        .or_else(|| profile_setting(config, "mfa_process"))
+        .filter(|command| !command.trim().is_empty());
+    match command {
+        Some(command) => terminal
+            .run_mfa_process(&command)?
+            .parse()
+            .map_err(|_| CliError::MfaProcessOutput),
+        None => terminal.read_mfa_code(),
+    }
+}
+
+/// A setting of the profile with the long-term credentials, from the shared
+/// AWS files.
+fn profile_setting(config: &Config, key: &str) -> Option<String> {
+    profile::setting(
+        config.config_file.as_deref(),
+        config.credentials_file.as_deref(),
+        &config.profile,
+        key,
+    )
 }
 
 fn file_error(target: &ProfileTarget, source: io::Error) -> CliError {
@@ -199,7 +222,6 @@ mod tests {
     use super::*;
     use crate::config::Env;
     use crate::config::tests::args;
-    use crate::mfa::MfaCode;
     use crate::session::tests::{EXPIRATION_SECS, at, sample_credentials};
     use std::cell::RefCell;
     use std::fs;
@@ -277,6 +299,8 @@ mod tests {
         stdout: String,
         notes: Vec<String>,
         shells: Vec<ShellLaunch>,
+        /// What the `mfa_process` command prints.
+        process_output: String,
     }
 
     impl FakeTerminal {
@@ -292,6 +316,11 @@ mod tests {
         fn read_mfa_code(&mut self) -> Result<MfaCode, CliError> {
             self.log.borrow_mut().push("prompt".to_owned());
             Ok(PROMPTED_CODE.parse().unwrap())
+        }
+
+        fn run_mfa_process(&mut self, command: &str) -> Result<String, CliError> {
+            self.log.borrow_mut().push(format!("mfa_process {command}"));
+            Ok(self.process_output.clone())
         }
 
         fn print(&mut self, text: &str) -> Result<(), CliError> {
@@ -510,6 +539,80 @@ mod tests {
         t.run(&["-e", "-c", "123456"]).await.unwrap();
 
         assert!(t.called("GetSessionToken arn:aws:iam::1:mfa/dev 123456 3600"));
+    }
+
+    #[tokio::test]
+    async fn test_mfa_process_from_profile() {
+        let mut t = Harness::new();
+        t.write(
+            "config",
+            "[profile dev]\nmfa_process = ykman oath accounts code --single aws\n",
+        );
+        t.terminal.process_output = "111222\n".to_owned();
+
+        t.run(&["-e", "-p", "dev"]).await.unwrap();
+
+        assert_eq!(
+            t.log(),
+            [
+                "GetCallerIdentity",
+                "ListMFADevices",
+                "mfa_process ykman oath accounts code --single aws",
+                &format!("GetSessionToken {DEVICE} 111222 3600"),
+                "print",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mfa_process_flag_wins_over_profile() {
+        let mut t = Harness::new();
+        t.write("config", "[default]\nmfa_process = pass otp aws\n");
+        t.terminal.process_output = "111222".to_owned();
+
+        t.run(&["-e", "--mfa-process", "op item get aws --otp"])
+            .await
+            .unwrap();
+
+        assert!(t.called("mfa_process op item get aws --otp"));
+        assert!(!t.called("mfa_process pass"));
+    }
+
+    #[tokio::test]
+    async fn test_code_wins_over_mfa_process() {
+        let mut t = Harness::new();
+        t.write("config", "[default]\nmfa_process = pass otp aws\n");
+
+        t.run(&["-e", "-c", "123456"]).await.unwrap();
+
+        assert!(!t.called("mfa_process"));
+        assert!(t.called(&format!("GetSessionToken {DEVICE} 123456")));
+    }
+
+    #[tokio::test]
+    async fn test_empty_mfa_process_prompts() {
+        let mut t = Harness::new();
+        t.write("config", "[default]\nmfa_process =\n");
+
+        t.run(&["-e"]).await.unwrap();
+
+        assert!(!t.called("mfa_process"));
+        assert!(t.called("prompt"));
+    }
+
+    #[tokio::test]
+    async fn test_mfa_process_must_print_only_a_code() {
+        let mut t = Harness::new();
+        // `ykman oath accounts code` without --single also prints the name.
+        t.terminal.process_output = "aws  123456\n".to_owned();
+
+        let error = t
+            .run(&["-e", "--mfa-process", "ykman oath accounts code aws"])
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, CliError::MfaProcessOutput), "{error:?}");
+        assert!(!t.called("GetSessionToken"));
     }
 
     #[tokio::test]

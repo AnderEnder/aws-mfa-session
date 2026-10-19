@@ -32,9 +32,12 @@ pub struct Args {
     /// AWS region. AWS_REGION is used if not defined
     #[arg(long, short = 'r')]
     pub region: Option<String>,
-    /// MFA code from MFA resource. Prompted for when not provided
+    /// MFA code from MFA resource. If not provided, it comes from --mfa-process or the profile's mfa_process, or is prompted for
     #[arg(long, short = 'c')]
     pub code: Option<MfaCode>,
+    /// Command that prints the MFA code, e.g. `ykman oath accounts code --single aws`. Runs through `sh -c` (`cmd /C` on Windows). The profile's mfa_process is used if not defined
+    #[arg(long, value_name = "COMMAND", conflicts_with = "code")]
+    pub mfa_process: Option<String>,
     /// MFA device ARN. If not provided, will try to read mfa_serial from AWS profile configuration, then fall back to automatic detection
     #[arg(long, short = 'a')]
     pub arn: Option<String>,
@@ -115,6 +118,7 @@ mod tests {
         assert!(!args.shell);
         assert!(!args.force);
         assert_eq!(args.code, None);
+        assert_eq!(args.mfa_process, None);
         assert_eq!(args.format, None);
         assert!(args.profile.is_none());
         assert!(args.credentials_file.is_none());
@@ -223,6 +227,23 @@ mod tests {
             assert_eq!(error.kind(), ErrorKind::ValueValidation, "code {code:?}");
             assert!(error.to_string().contains("exactly 6 digits"));
         }
+    }
+
+    #[test]
+    fn test_mfa_process() {
+        let args = parse(&[
+            "-e",
+            "--mfa-process",
+            "ykman oath accounts code --single aws",
+        ])
+        .unwrap();
+        assert_eq!(
+            args.mfa_process.as_deref(),
+            Some("ykman oath accounts code --single aws")
+        );
+
+        let error = parse(&["-e", "--mfa-process", "pass otp aws", "-c", "123456"]).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
     }
 
     #[test]

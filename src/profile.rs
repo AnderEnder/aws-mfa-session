@@ -1,30 +1,31 @@
-//! Looks up a profile's `mfa_serial` in the shared AWS config files.
+//! Looks up profile settings, such as `mfa_serial`, in the shared AWS files.
 
 use std::fs;
 use std::path::Path;
 
 use aws_shared_config::{Document, FileKind};
 
-/// The `mfa_serial` configured for `profile`. The config file
-/// (`~/.aws/config`) takes precedence over the credentials file.
-pub fn mfa_serial(
+/// The `key` setting of `profile`. The config file (`~/.aws/config`) takes
+/// precedence over the credentials file.
+pub fn setting(
     config_file: Option<&Path>,
     credentials_file: Option<&Path>,
     profile: &str,
+    key: &str,
 ) -> Option<String> {
     [
         (config_file, FileKind::Config),
         (credentials_file, FileKind::Credentials),
     ]
     .into_iter()
-    .find_map(|(file, kind)| mfa_serial_in(&fs::read_to_string(file?).ok()?, kind, profile))
+    .find_map(|(file, kind)| setting_in(&fs::read_to_string(file?).ok()?, kind, profile, key))
 }
 
 /// Profiles are `[profile name]` (or `[default]`) in the config file and
 /// `[name]` in the credentials file, as the AWS SDKs read them.
-fn mfa_serial_in(contents: &str, kind: FileKind, profile: &str) -> Option<String> {
+fn setting_in(contents: &str, kind: FileKind, profile: &str, key: &str) -> Option<String> {
     let doc = Document::parse(contents, kind).ok()?;
-    doc.profile(profile)?.get("mfa_serial").map(str::to_owned)
+    doc.profile(profile)?.get(key).map(str::to_owned)
 }
 
 #[cfg(test)]
@@ -44,7 +45,7 @@ region = us-west-2
 [prod]
 mfa_serial = ignored-without-profile-prefix
 ";
-        let lookup = |profile| mfa_serial_in(config, FileKind::Config, profile);
+        let lookup = |profile| setting_in(config, FileKind::Config, profile, "mfa_serial");
         assert_eq!(
             lookup("default").as_deref(),
             Some("arn:aws:iam::123456789012:mfa/default-user")
@@ -61,7 +62,7 @@ mfa_serial = ignored-without-profile-prefix
     fn test_prefixed_default_wins() {
         let config = "[default]\nmfa_serial = plain\n\n[profile default]\nmfa_serial = prefixed\n";
         assert_eq!(
-            mfa_serial_in(config, FileKind::Config, "default").as_deref(),
+            setting_in(config, FileKind::Config, "default", "mfa_serial").as_deref(),
             Some("prefixed")
         );
     }
@@ -70,7 +71,8 @@ mfa_serial = ignored-without-profile-prefix
     fn test_credentials_file_profiles() {
         let credentials =
             "[dev]\nmfa_serial = GAHT12345678\n\n[profile prod]\nmfa_serial = ignored\n";
-        let lookup = |profile| mfa_serial_in(credentials, FileKind::Credentials, profile);
+        let lookup =
+            |profile| setting_in(credentials, FileKind::Credentials, profile, "mfa_serial");
         assert_eq!(lookup("dev").as_deref(), Some("GAHT12345678"));
         assert_eq!(lookup("prod"), None);
     }
@@ -79,12 +81,15 @@ mfa_serial = ignored-without-profile-prefix
     fn test_missing_or_invalid_files() {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("missing");
-        assert_eq!(mfa_serial(Some(&missing), Some(&missing), "dev"), None);
-        assert_eq!(mfa_serial(None, None, "dev"), None);
+        assert_eq!(
+            setting(Some(&missing), Some(&missing), "dev", "mfa_serial"),
+            None
+        );
+        assert_eq!(setting(None, None, "dev", "mfa_serial"), None);
 
         let invalid = dir.path().join("invalid");
         fs::write(&invalid, "mfa_serial = no section\n").unwrap();
-        assert_eq!(mfa_serial(Some(&invalid), None, "dev"), None);
+        assert_eq!(setting(Some(&invalid), None, "dev", "mfa_serial"), None);
     }
 
     #[test]
@@ -96,12 +101,25 @@ mfa_serial = ignored-without-profile-prefix
         fs::write(&credentials, "[dev]\nmfa_serial = from-credentials\n").unwrap();
 
         assert_eq!(
-            mfa_serial(Some(&config), Some(&credentials), "dev").as_deref(),
+            setting(Some(&config), Some(&credentials), "dev", "mfa_serial").as_deref(),
             Some("from-config")
         );
         assert_eq!(
-            mfa_serial(None, Some(&credentials), "dev").as_deref(),
+            setting(None, Some(&credentials), "dev", "mfa_serial").as_deref(),
             Some("from-credentials")
+        );
+    }
+
+    #[test]
+    fn test_other_settings() {
+        let config = "[profile dev]\nmfa_process = ykman oath accounts code --single aws\n";
+        assert_eq!(
+            setting_in(config, FileKind::Config, "dev", "mfa_process").as_deref(),
+            Some("ykman oath accounts code --single aws")
+        );
+        assert_eq!(
+            setting_in(config, FileKind::Config, "dev", "mfa_serial"),
+            None
         );
     }
 
@@ -114,7 +132,7 @@ mfa_serial = ignored-without-profile-prefix
         fs::write(&credentials, "[dev]\nmfa_serial = from-credentials\n").unwrap();
 
         assert_eq!(
-            mfa_serial(Some(&config), Some(&credentials), "dev").as_deref(),
+            setting(Some(&config), Some(&credentials), "dev", "mfa_serial").as_deref(),
             Some("from-credentials")
         );
     }

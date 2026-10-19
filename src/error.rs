@@ -6,6 +6,7 @@ use thiserror::Error;
 
 /// Every way a run can fail, with a hint on how to fix it where one helps.
 #[derive(Debug, Error, Diagnostic)]
+#[non_exhaustive]
 pub enum CliError {
     #[error("no output mode selected")]
     #[diagnostic(help("pass at least one of --shell/-s, --export/-e, or --update-profile/-u"))]
@@ -22,8 +23,21 @@ pub enum CliError {
     NoMfaDevice,
 
     #[error("cannot read the MFA code")]
-    #[diagnostic(help("pass the code with --code when not running in an interactive terminal"))]
+    #[diagnostic(help(
+        "pass the code with --code, or a command that prints it with --mfa-process, when not \
+         running in an interactive terminal"
+    ))]
     Prompt(#[source] dialoguer::Error),
+
+    // The command is left out of these messages: it may hold a TOTP secret.
+    #[error("the MFA code command failed")]
+    MfaProcess(#[source] io::Error),
+
+    #[error("the MFA code command did not print a 6-digit code")]
+    #[diagnostic(help(
+        "it must print only the code, e.g. `ykman oath accounts code --single <account>`"
+    ))]
+    MfaProcessOutput,
 
     #[error("AWS {operation} failed: {message}")]
     Aws {
@@ -112,6 +126,7 @@ mod tests {
             CliError::NoOutputMode,
             CliError::NoCredentialsFile,
             CliError::NoMfaDevice,
+            CliError::MfaProcessOutput,
         ] {
             assert!(error.help().is_some(), "{error} should explain the fix");
         }

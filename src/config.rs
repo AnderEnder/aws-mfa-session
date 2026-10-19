@@ -115,6 +115,8 @@ pub struct Config {
     /// `--arn`: the MFA device to use instead of looking one up.
     pub mfa_device: Option<String>,
     pub code: Option<MfaCode>,
+    /// `--mfa-process`: a command that prints the MFA code.
+    pub mfa_process: Option<String>,
     pub duration_secs: i32,
     /// `--force`: never reuse the `--update-profile` session.
     pub force: bool,
@@ -169,6 +171,7 @@ impl Config {
             },
             mfa_device: args.arn,
             code: args.code,
+            mfa_process: args.mfa_process,
             duration_secs: args.duration,
             force: args.force,
             outputs,
@@ -365,6 +368,13 @@ pub(crate) mod tests {
         assert_eq!(config.duration_secs, 900);
         assert_eq!(config.sdk.region.as_deref(), Some("eu-west-1"));
         assert!(!config.force);
+    }
+
+    #[test]
+    fn test_passes_through_mfa_process() {
+        let config = config(&["-e", "--mfa-process", "pass otp aws"], &home_env());
+        assert_eq!(config.mfa_process.as_deref(), Some("pass otp aws"));
+        assert_eq!(config.code, None);
     }
 
     #[test]
