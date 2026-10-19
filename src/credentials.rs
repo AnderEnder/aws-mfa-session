@@ -1,6 +1,7 @@
 //! Reading and updating session profiles in the shared credentials file.
 
 use std::error::Error;
+use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 use std::{fs, io};
@@ -44,10 +45,20 @@ struct StoredSession {
     expiration: Option<String>,
 }
 
+/// Read and parse the credentials file; a missing file reads as empty.
+pub fn load(path: &Path) -> io::Result<Document> {
+    // A missing file is a valid starting point (e.g. env-var-only auth, fresh
+    // setup): `save` creates it.
+    let contents = match fs::read_to_string(path) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
+        result => result?,
+    };
+    Document::parse(&contents, FileKind::Credentials).map_err(invalid_data)
+}
+
 /// Read back the session credentials stored in the `[name]` profile, if it has
 /// a complete set.
-pub fn find_session(contents: &str, name: &str) -> Option<SessionCredentials> {
-    let doc = Document::parse(contents, FileKind::Credentials).ok()?;
+pub fn find_session(doc: &Document, name: &str) -> Option<SessionCredentials> {
     let stored: StoredSession = doc.profile(name)?.deserialize().ok()?;
     Some(SessionCredentials {
         access_key_id: stored.aws_access_key_id,
@@ -57,23 +68,12 @@ pub fn find_session(contents: &str, name: &str) -> Option<SessionCredentials> {
     })
 }
 
-/// Read the credentials file; a missing file reads as empty.
-pub fn read(path: &Path) -> io::Result<String> {
-    match fs::read_to_string(path) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(String::new()),
-        result => result,
-    }
-}
-
 /// Write `profile` into the credentials file at `path`, creating the file (and
 /// its directory) if needed. Only the profile's session keys change: comments,
 /// its other keys, and other profiles stay as they were. The file is replaced
 /// atomically and left readable only by its owner.
 pub fn save(path: &Path, profile: &SessionProfile) -> io::Result<()> {
-    // A missing credentials file is a valid starting point (e.g. env-var-only
-    // auth, fresh setup): treat it as empty and create it below.
-    let contents = read(path)?;
-    let mut doc = Document::parse(&contents, FileKind::Credentials).map_err(invalid_data)?;
+    let mut doc = load(path)?;
     doc.profile_mut(profile.name)
         .serialize(&profile.stored())
         .map_err(invalid_data)?;
@@ -92,8 +92,11 @@ pub fn save(path: &Path, profile: &SessionProfile) -> io::Result<()> {
         let _ = set_mode(dir, 0o700);
     }
 
-    let temp_file = NamedTempFile::new_in(dir)?;
-    fs::write(temp_file.path(), updated)?;
+    let mut temp_file = NamedTempFile::new_in(dir)?;
+    temp_file.write_all(updated.as_bytes())?;
+    // Flush to disk before the rename, so a crash cannot leave an empty file
+    // in place of the user's credentials.
+    temp_file.as_file().sync_all()?;
 
     // Enforce 0600 on the secret-bearing file rather than inheriting whatever
     // permissions the original had (which may have been group/world readable).
@@ -202,6 +205,12 @@ mod test {
         }
     }
 
+    /// The session in `[name]` of a credentials file with `contents`.
+    fn session_in(contents: &str, name: &str) -> Option<SessionCredentials> {
+        let doc = Document::parse(contents, FileKind::Credentials).unwrap();
+        find_session(&doc, name)
+    }
+
     /// A profile with long-term credentials, as users write them by hand.
     fn long_term(name: &str) -> String {
         format!("[{name}]\naws_access_key_id = AKIA\naws_secret_access_key = SECRET\n")
@@ -263,7 +272,7 @@ mod test {
             region: Some("eu-west-1"),
         };
         let contents = format!("{}\n{}", long_term("default"), profile.section());
-        assert_eq!(find_session(&contents, "session"), Some(credentials));
+        assert_eq!(session_in(&contents, "session"), Some(credentials));
     }
 
     #[test]
@@ -275,7 +284,7 @@ mod test {
                         aws_secret_access_key   =   SECRET  \r\n\
                         aws_session_token = TOKEN==\r\n\
                         expiration = 2027-01-15T08:00:00Z\r\n";
-        let found = find_session(contents, "session").unwrap();
+        let found = session_in(contents, "session").unwrap();
         assert_eq!(found.access_key_id, "KEY");
         assert_eq!(found.secret_access_key, "SECRET");
         assert_eq!(found.session_token, "TOKEN==");
@@ -285,17 +294,16 @@ mod test {
     #[test]
     fn test_find_session_requires_complete_credentials() {
         // Long-term credentials have no session token, so they are not a session.
-        assert_eq!(find_session(&long_term("dev"), "dev"), None);
-        assert_eq!(find_session(&long_term("dev"), "missing"), None);
-        assert_eq!(find_session("", "dev"), None);
-        assert_eq!(find_session("not a credentials file", "dev"), None);
+        assert_eq!(session_in(&long_term("dev"), "dev"), None);
+        assert_eq!(session_in(&long_term("dev"), "missing"), None);
+        assert_eq!(session_in("", "dev"), None);
     }
 
     #[test]
     fn test_find_session_with_unparsable_expiration() {
         let contents = "[s]\naws_access_key_id = K\naws_secret_access_key = S\n\
                         aws_session_token = T\nexpiration = soon\n";
-        assert_eq!(find_session(contents, "s").unwrap().expiration, None);
+        assert_eq!(session_in(contents, "s").unwrap().expiration, None);
     }
 
     fn save_sample(path: &Path) -> io::Result<()> {
@@ -376,9 +384,22 @@ mod test {
     }
 
     #[test]
-    fn test_read_missing_file_is_empty() {
+    fn test_load_missing_file_is_empty() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(read(&dir.path().join("credentials")).unwrap(), "");
+        let doc = load(&dir.path().join("credentials")).unwrap();
+        assert!(doc.profile_names().is_empty());
+    }
+
+    #[test]
+    fn test_load_rejects_invalid_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials");
+        fs::write(&path, "not a credentials file\n").unwrap();
+
+        let error = load(&path).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("line 1"), "{error}");
     }
 
     #[test]
@@ -390,10 +411,7 @@ mod test {
 
         let written = fs::read_to_string(&path).unwrap();
         assert!(written.starts_with("[session]\naws_access_key_id = ASIATEST\n"));
-        assert_eq!(
-            find_session(&written, "session"),
-            Some(sample_credentials())
-        );
+        assert_eq!(session_in(&written, "session"), Some(sample_credentials()));
 
         assert_mode(&path, 0o600, "newly created credentials file must be 0600");
         assert_mode(

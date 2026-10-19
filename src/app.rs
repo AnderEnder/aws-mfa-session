@@ -1,10 +1,11 @@
 //! The flow of a run: get session credentials — reused or new — and deliver
 //! them to each requested output.
 
+use std::io;
 use std::time::{Duration, SystemTime};
 
 use crate::aws::AwsApi;
-use crate::config::{Config, ProfileTarget};
+use crate::config::{Config, ProfileTarget, SdkSettings};
 use crate::credentials::{self, SessionProfile};
 use crate::error::CliError;
 use crate::mfa;
@@ -17,71 +18,28 @@ use crate::terminal::Terminal;
 /// reused session never ends sooner than the shortest one STS issues.
 const MIN_REUSABLE: Duration = Duration::from_secs(15 * 60);
 
+/// Credentials ready for the outputs, and who they belong to when known.
+struct Session {
+    credentials: SessionCredentials,
+    identity: Option<Identity>,
+}
+
 pub(crate) async fn run(
     config: &Config,
     aws: &impl AwsApi,
     terminal: &mut impl Terminal,
     now: SystemTime,
 ) -> Result<(), CliError> {
-    let outputs = &config.outputs;
-    let reusable = reusable_session(config, now)?;
-    if let Some((target, credentials)) = &reusable {
-        terminal.note(&format!(
-            "Reusing profile '{}', valid until {}. Pass --force to renew it.",
-            target.name,
-            credentials.describe_validity(now)
-        ));
-    }
-
-    // For a new session, looking up the identity first proves the long-term
-    // credentials work before the user is asked for an MFA code. A reused
-    // session only needs it to label the prompt, so a failure is not fatal.
-    let identity = match &reusable {
-        None => Some(aws.caller_identity().await?),
-        Some(_) if outputs.shows_prompt() => aws
-            .caller_identity()
-            .await
-            .inspect_err(|error| terminal.note(&format!("Leaving the prompt unchanged: {error}")))
-            .ok(),
-        Some(_) => None,
+    let session = match reusable_session(config, now)? {
+        Some((target, credentials)) => reuse(config, aws, terminal, target, credentials, now).await,
+        None => renew(config, aws, terminal, now).await?,
     };
-
-    let credentials = match reusable {
-        Some((_, credentials)) => credentials,
-        None => {
-            let credentials = new_session(config, aws, terminal).await?;
-            terminal.note(&format!(
-                "New session valid until {}.",
-                credentials.describe_validity(now)
-            ));
-            if let Some(target) = &outputs.session_profile {
-                save_profile(target, &credentials, aws.region().await.as_deref())?;
-                terminal.note(&format!(
-                    "Saved it to profile '{}' in {}.",
-                    target.name,
-                    target.file.display()
-                ));
-            }
-            credentials
-        }
-    };
-
-    if let Some(format) = outputs.export {
-        terminal.print(&format.render(&credentials, identity.as_ref()))?;
-    }
-    if let Some(program) = &outputs.shell {
-        terminal.run_shell(&shell_launch(
-            config,
-            program,
-            &credentials,
-            identity.as_ref(),
-        ))?;
-    }
-    Ok(())
+    deliver(config, terminal, &session)
 }
 
 /// The `--update-profile` profile and its session, if the session is still
-/// valid and `--force` was not passed.
+/// valid and `--force` was not passed. The file is read even with `--force`,
+/// so one that could not be updated fails the run before an MFA code is spent.
 fn reusable_session(
     config: &Config,
     now: SystemTime,
@@ -89,14 +47,11 @@ fn reusable_session(
     let Some(target) = &config.outputs.session_profile else {
         return Ok(None);
     };
+    let doc = credentials::load(&target.file).map_err(|source| file_error(target, source))?;
     if config.force {
         return Ok(None);
     }
-    let contents = credentials::read(&target.file).map_err(|source| CliError::CredentialsFile {
-        path: target.file.clone(),
-        source,
-    })?;
-    Ok(credentials::find_session(&contents, &target.name)
+    Ok(credentials::find_session(&doc, &target.name)
         .filter(|session| {
             session
                 .remaining(now)
@@ -105,19 +60,78 @@ fn reusable_session(
         .map(|session| (target, session)))
 }
 
-async fn new_session(
+/// Use a saved session as it is. AWS is asked only who the caller is, to label
+/// a shell prompt, so a failure there is not fatal.
+async fn reuse(
     config: &Config,
     aws: &impl AwsApi,
     terminal: &mut impl Terminal,
-) -> Result<SessionCredentials, CliError> {
+    target: &ProfileTarget,
+    credentials: SessionCredentials,
+    now: SystemTime,
+) -> Session {
+    terminal.note(&format!(
+        "Reusing profile '{}', valid until {}. Pass --force to renew it.",
+        target.name,
+        credentials.describe_validity(now)
+    ));
+    let identity = if config.outputs.shows_prompt() {
+        aws.caller_identity()
+            .await
+            .inspect_err(|error| terminal.note(&format!("Leaving the prompt unchanged: {error}")))
+            .ok()
+    } else {
+        None
+    };
+    Session {
+        credentials,
+        identity,
+    }
+}
+
+/// Request a new session, and save it to the `--update-profile` profile if
+/// there is one.
+async fn renew(
+    config: &Config,
+    aws: &impl AwsApi,
+    terminal: &mut impl Terminal,
+    now: SystemTime,
+) -> Result<Session, CliError> {
+    // Looking up the identity first proves the long-term credentials work
+    // before the user is asked for an MFA code.
+    let identity = aws.caller_identity().await?;
     let device = mfa_device(config, aws).await?;
     // Asking only now means a time-based code is as fresh as possible.
     let code = match &config.code {
         Some(code) => code.clone(),
         None => terminal.read_mfa_code()?,
     };
-    aws.session_token(&device, &code, config.duration_secs)
-        .await
+    let credentials = aws
+        .session_token(&device, &code, config.duration_secs)
+        .await?;
+    terminal.note(&format!(
+        "New session valid until {}.",
+        credentials.describe_validity(now)
+    ));
+
+    if let Some(target) = &config.outputs.session_profile {
+        let region = aws.region().await;
+        let profile = SessionProfile {
+            name: &target.name,
+            credentials: &credentials,
+            region: region.as_deref(),
+        };
+        credentials::save(&target.file, &profile).map_err(|source| file_error(target, source))?;
+        terminal.note(&format!(
+            "Saved it to profile '{}' in {}.",
+            target.name,
+            target.file.display()
+        ));
+    }
+    Ok(Session {
+        credentials,
+        identity: Some(identity),
+    })
 }
 
 /// The MFA device from `--arn`, else the profile's `mfa_serial`, else the
@@ -127,8 +141,8 @@ async fn mfa_device(config: &Config, aws: &impl AwsApi) -> Result<String, CliErr
         return Ok(device.clone());
     }
     let configured = profile::mfa_serial(
-        config.config_file(),
-        config.credentials_file(),
+        config.config_file.as_deref(),
+        config.credentials_file.as_deref(),
         &config.profile,
     );
     if let Some(device) = configured {
@@ -137,37 +151,42 @@ async fn mfa_device(config: &Config, aws: &impl AwsApi) -> Result<String, CliErr
     mfa::select_device(aws.mfa_devices().await?).ok_or(CliError::NoMfaDevice)
 }
 
-fn save_profile(
-    target: &ProfileTarget,
-    credentials: &SessionCredentials,
-    region: Option<&str>,
-) -> Result<(), CliError> {
-    let profile = SessionProfile {
-        name: &target.name,
-        credentials,
-        region,
-    };
-    credentials::save(&target.file, &profile).map_err(|source| CliError::CredentialsFile {
+fn file_error(target: &ProfileTarget, source: io::Error) -> CliError {
+    CliError::CredentialsFile {
         path: target.file.clone(),
         source,
-    })
+    }
 }
 
-fn shell_launch(
+/// Print the session for `--export`, then start the `--shell`.
+fn deliver(
     config: &Config,
-    program: &str,
-    credentials: &SessionCredentials,
-    identity: Option<&Identity>,
-) -> ShellLaunch {
-    let mut env = credentials.env_vars();
+    terminal: &mut impl Terminal,
+    session: &Session,
+) -> Result<(), CliError> {
+    let outputs = &config.outputs;
+    if let Some(format) = outputs.export {
+        terminal.print(&format.render(&session.credentials, session.identity.as_ref()))?;
+    }
+    if let Some(program) = &outputs.shell {
+        terminal.run_shell(&shell_launch(&config.sdk, program, session))?;
+    }
+    Ok(())
+}
+
+fn shell_launch(sdk: &SdkSettings, program: &str, session: &Session) -> ShellLaunch {
+    let mut env = session.credentials.env_vars();
     // The shell sees the same profile settings this run used.
-    if let Some(profile) = &config.sdk.profile {
+    if let Some(profile) = &sdk.profile {
         env.push(("AWS_PROFILE", profile.clone()));
     }
-    if let Some(file) = &config.sdk.credentials_file {
+    if let Some(file) = &sdk.credentials_file {
         env.push(("AWS_SHARED_CREDENTIALS_FILE", file.display().to_string()));
     }
-    let prompt = identity.and_then(|id| Shell::detect(program).prompt_var(&id.prompt_label()));
+    let prompt = session
+        .identity
+        .as_ref()
+        .and_then(|id| Shell::detect(program).prompt_var(&id.prompt_label()));
     env.extend(prompt);
     ShellLaunch {
         program: program.to_owned(),
@@ -184,7 +203,7 @@ mod tests {
     use crate::session::tests::{EXPIRATION_SECS, at, sample_credentials};
     use std::cell::RefCell;
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::rc::Rc;
 
     const ALICE_ARN: &str = "arn:aws:iam::123456789012:user/alice";
@@ -289,36 +308,42 @@ mod tests {
             self.log
                 .borrow_mut()
                 .push(format!("shell {}", launch.program));
-            self.shells.push(ShellLaunch {
-                program: launch.program.clone(),
-                env: launch.env.clone(),
-            });
+            self.shells.push(launch.clone());
             Ok(())
         }
     }
 
-    /// An isolated home directory with empty AWS files.
-    struct Home {
-        dir: tempfile::TempDir,
+    /// Runs the flow against the fakes, in a home directory with an empty
+    /// `~/.aws`.
+    struct Harness {
+        home: tempfile::TempDir,
+        env: Env,
+        log: Log,
+        aws: FakeAws,
+        terminal: FakeTerminal,
     }
 
-    impl Home {
+    impl Harness {
         fn new() -> Self {
-            let dir = tempfile::tempdir().unwrap();
-            fs::create_dir(dir.path().join(".aws")).unwrap();
-            Self { dir }
-        }
-
-        fn env(&self) -> Env {
-            Env {
-                home_dir: Some(self.dir.path().to_owned()),
+            let home = tempfile::tempdir().unwrap();
+            fs::create_dir(home.path().join(".aws")).unwrap();
+            let env = Env {
+                home_dir: Some(home.path().to_owned()),
                 shell: Some("/bin/bash".to_owned()),
                 ..Env::default()
+            };
+            let log = Log::default();
+            Self {
+                aws: FakeAws::new(&log),
+                terminal: FakeTerminal::new(&log),
+                home,
+                env,
+                log,
             }
         }
 
-        fn aws_file(&self, name: &str) -> std::path::PathBuf {
-            self.dir.path().join(".aws").join(name)
+        fn aws_file(&self, name: &str) -> PathBuf {
+            self.home.path().join(".aws").join(name)
         }
 
         fn write(&self, name: &str, contents: &str) {
@@ -329,32 +354,31 @@ mod tests {
             fs::read_to_string(self.aws_file(name)).unwrap()
         }
 
-        fn config(&self, arguments: &[&str]) -> Config {
-            Config::new(args(arguments), &self.env()).unwrap()
+        /// The AWS calls, prompts and outputs so far, in order.
+        fn log(&self) -> Vec<String> {
+            self.log.borrow().clone()
         }
-    }
 
-    /// Run the flow at a time when sample credentials have `left` remaining.
-    async fn run_with_left(
-        config: &Config,
-        aws: &FakeAws,
-        terminal: &mut FakeTerminal,
-        left: Duration,
-    ) -> Result<(), CliError> {
-        let now = at(EXPIRATION_SECS) - left;
-        run(config, aws, terminal, now).await
-    }
+        fn called(&self, prefix: &str) -> bool {
+            self.log().iter().any(|entry| entry.starts_with(prefix))
+        }
 
-    async fn run_at_start(
-        config: &Config,
-        aws: &FakeAws,
-        terminal: &mut FakeTerminal,
-    ) -> Result<(), CliError> {
-        run_with_left(config, aws, terminal, Duration::from_secs(3600)).await
-    }
+        /// Run with `arguments` while sample credentials have an hour left.
+        async fn run(&mut self, arguments: &[&str]) -> Result<(), CliError> {
+            self.run_with_left(arguments, Duration::from_secs(3600))
+                .await
+        }
 
-    fn log_entries(log: &Log) -> Vec<String> {
-        log.borrow().clone()
+        /// Run with `arguments` while sample credentials have `left` remaining.
+        async fn run_with_left(
+            &mut self,
+            arguments: &[&str],
+            left: Duration,
+        ) -> Result<(), CliError> {
+            let config = Config::new(args(arguments), &self.env).unwrap();
+            let now = at(EXPIRATION_SECS) - left;
+            super::run(&config, &self.aws, &mut self.terminal, now).await
+        }
     }
 
     fn saved_session(name: &str, left_from: SystemTime) -> String {
@@ -373,15 +397,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_export_with_code() {
-        let home = Home::new();
-        let log = Log::default();
-        let (aws, mut terminal) = (FakeAws::new(&log), FakeTerminal::new(&log));
-        let config = home.config(&["-e", "-c", "123456"]);
+        let mut t = Harness::new();
 
-        run_at_start(&config, &aws, &mut terminal).await.unwrap();
+        t.run(&["-e", "-c", "123456"]).await.unwrap();
 
         assert_eq!(
-            log_entries(&log),
+            t.log(),
             [
                 "GetCallerIdentity",
                 "ListMFADevices",
@@ -390,7 +411,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            terminal.stdout,
+            t.terminal.stdout,
             "export AWS_ACCESS_KEY_ID='ASIATEST'\n\
              export AWS_SECRET_ACCESS_KEY='secret'\n\
              export AWS_SESSION_TOKEN='token'\n\
@@ -398,22 +419,19 @@ mod tests {
              export PS1='AWS:alice@123456789012 \\$ '\n"
         );
         assert_eq!(
-            terminal.notes,
+            t.terminal.notes,
             ["New session valid until 2027-01-15T08:00:00Z (1h 00m left)."]
         );
     }
 
     #[tokio::test]
     async fn test_prompts_for_code_after_checking_credentials() {
-        let home = Home::new();
-        let log = Log::default();
-        let (aws, mut terminal) = (FakeAws::new(&log), FakeTerminal::new(&log));
-        let config = home.config(&["-e", "-d", "7200"]);
+        let mut t = Harness::new();
 
-        run_at_start(&config, &aws, &mut terminal).await.unwrap();
+        t.run(&["-e", "-d", "7200"]).await.unwrap();
 
         assert_eq!(
-            log_entries(&log),
+            t.log(),
             [
                 "GetCallerIdentity",
                 "ListMFADevices",
@@ -426,18 +444,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_invalid_credentials_fail_before_prompting() {
-        let home = Home::new();
-        let log = Log::default();
-        let aws = FakeAws {
-            identity_error: true,
-            ..FakeAws::new(&log)
-        };
-        let mut terminal = FakeTerminal::new(&log);
-        let config = home.config(&["-u", "session"]);
+        let mut t = Harness::new();
+        t.aws.identity_error = true;
 
-        let error = run_at_start(&config, &aws, &mut terminal)
-            .await
-            .unwrap_err();
+        let error = t.run(&["-u", "session"]).await.unwrap_err();
 
         assert!(matches!(
             error,
@@ -446,21 +456,20 @@ mod tests {
                 ..
             }
         ));
-        assert_eq!(log_entries(&log), ["GetCallerIdentity"]);
-        assert!(!home.aws_file("credentials").exists());
+        assert_eq!(t.log(), ["GetCallerIdentity"]);
+        assert!(!t.aws_file("credentials").exists());
     }
 
     #[tokio::test]
     async fn test_arn_skips_device_lookup() {
-        let home = Home::new();
-        let log = Log::default();
-        let (aws, mut terminal) = (FakeAws::new(&log), FakeTerminal::new(&log));
-        let config = home.config(&["-e", "-c", "123456", "-a", "GAHT1234"]);
+        let mut t = Harness::new();
 
-        run_at_start(&config, &aws, &mut terminal).await.unwrap();
+        t.run(&["-e", "-c", "123456", "-a", "GAHT1234"])
+            .await
+            .unwrap();
 
         assert_eq!(
-            log_entries(&log),
+            t.log(),
             [
                 "GetCallerIdentity",
                 "GetSessionToken GAHT1234 123456 3600",
@@ -471,19 +480,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_profile_mfa_serial_skips_device_lookup() {
-        let home = Home::new();
-        home.write(
+        let mut t = Harness::new();
+        t.write(
             "config",
             "[profile dev]\nmfa_serial = arn:aws:iam::1:mfa/dev\n",
         );
-        let log = Log::default();
-        let (aws, mut terminal) = (FakeAws::new(&log), FakeTerminal::new(&log));
-        let config = home.config(&["-e", "-c", "123456", "-p", "dev"]);
 
-        run_at_start(&config, &aws, &mut terminal).await.unwrap();
+        t.run(&["-e", "-c", "123456", "-p", "dev"]).await.unwrap();
 
         assert_eq!(
-            log_entries(&log),
+            t.log(),
             [
                 "GetCallerIdentity",
                 "GetSessionToken arn:aws:iam::1:mfa/dev 123456 3600",
@@ -494,58 +500,38 @@ mod tests {
 
     #[tokio::test]
     async fn test_aws_profile_env_selects_mfa_serial() {
-        let home = Home::new();
-        home.write(
+        let mut t = Harness::new();
+        t.write(
             "config",
             "[profile dev]\nmfa_serial = arn:aws:iam::1:mfa/dev\n",
         );
-        let log = Log::default();
-        let (aws, mut terminal) = (FakeAws::new(&log), FakeTerminal::new(&log));
-        let env = Env {
-            aws_profile: Some("dev".to_owned()),
-            ..home.env()
-        };
-        let config = Config::new(args(&["-e", "-c", "123456"]), &env).unwrap();
+        t.env.aws_profile = Some("dev".to_owned());
 
-        run_at_start(&config, &aws, &mut terminal).await.unwrap();
+        t.run(&["-e", "-c", "123456"]).await.unwrap();
 
-        assert!(
-            log_entries(&log)
-                .contains(&"GetSessionToken arn:aws:iam::1:mfa/dev 123456 3600".to_owned())
-        );
+        assert!(t.called("GetSessionToken arn:aws:iam::1:mfa/dev 123456 3600"));
     }
 
     #[tokio::test]
     async fn test_no_usable_mfa_device() {
-        let home = Home::new();
-        let log = Log::default();
-        let aws = FakeAws {
-            devices: vec!["arn:aws:iam::1:u2f/user/alice/key".to_owned()],
-            ..FakeAws::new(&log)
-        };
-        let mut terminal = FakeTerminal::new(&log);
-        let config = home.config(&["-e"]);
+        let mut t = Harness::new();
+        t.aws.devices = vec!["arn:aws:iam::1:u2f/user/alice/key".to_owned()];
 
-        let error = run_at_start(&config, &aws, &mut terminal)
-            .await
-            .unwrap_err();
+        let error = t.run(&["-e"]).await.unwrap_err();
 
         assert!(matches!(error, CliError::NoMfaDevice));
-        assert!(!log_entries(&log).contains(&"prompt".to_owned()));
+        assert!(!t.called("prompt"));
     }
 
     #[tokio::test]
     async fn test_update_profile_saves_session() {
-        let home = Home::new();
-        home.write("credentials", "[default]\naws_access_key_id = LONGTERM\n");
-        let log = Log::default();
-        let (aws, mut terminal) = (FakeAws::new(&log), FakeTerminal::new(&log));
-        let config = home.config(&["-u", "session", "-c", "123456"]);
+        let mut t = Harness::new();
+        t.write("credentials", "[default]\naws_access_key_id = LONGTERM\n");
 
-        run_at_start(&config, &aws, &mut terminal).await.unwrap();
+        t.run(&["-u", "session", "-c", "123456"]).await.unwrap();
 
         assert_eq!(
-            home.read("credentials"),
+            t.read("credentials"),
             "[default]\naws_access_key_id = LONGTERM\n\n\
              [session]\n\
              aws_access_key_id = ASIATEST\n\
@@ -555,32 +541,48 @@ mod tests {
              expiration = 2027-01-15T08:00:00Z\n"
         );
         assert_eq!(
-            terminal.notes[1],
+            t.terminal.notes[1],
             format!(
                 "Saved it to profile 'session' in {}.",
-                home.aws_file("credentials").display()
+                t.aws_file("credentials").display()
             )
         );
-        assert!(terminal.stdout.is_empty());
+        assert!(t.terminal.stdout.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_unparsable_credentials_file_fails_before_aws() {
+        // A file that cannot be updated must not cost an MFA code.
+        let invalid = "aws_access_key_id = outside any profile\n";
+        for arguments in [&["-u", "session"][..], &["-u", "session", "--force"]] {
+            let mut t = Harness::new();
+            t.write("credentials", invalid);
+
+            let error = t.run(arguments).await.unwrap_err();
+
+            assert!(
+                matches!(error, CliError::CredentialsFile { .. }),
+                "{arguments:?}: {error:?}"
+            );
+            assert!(t.log().is_empty(), "{arguments:?}: {:?}", t.log());
+            assert_eq!(t.read("credentials"), invalid);
+        }
     }
 
     #[tokio::test]
     async fn test_valid_profile_is_reused_without_aws() {
-        let home = Home::new();
+        let mut t = Harness::new();
         let saved = saved_session("session", at(EXPIRATION_SECS));
-        home.write("credentials", &saved);
-        let log = Log::default();
-        let (aws, mut terminal) = (FakeAws::new(&log), FakeTerminal::new(&log));
-        let config = home.config(&["-u", "session"]);
+        t.write("credentials", &saved);
 
-        run_with_left(&config, &aws, &mut terminal, Duration::from_secs(2 * 3600))
+        t.run_with_left(&["-u", "session"], Duration::from_secs(2 * 3600))
             .await
             .unwrap();
 
-        assert!(log_entries(&log).is_empty(), "no AWS calls and no prompt");
-        assert_eq!(home.read("credentials"), saved, "the file is untouched");
+        assert!(t.log().is_empty(), "no AWS calls and no prompt");
+        assert_eq!(t.read("credentials"), saved, "the file is untouched");
         assert_eq!(
-            terminal.notes,
+            t.terminal.notes,
             [
                 "Reusing profile 'session', valid until 2027-01-15T08:00:00Z (2h 00m left). \
               Pass --force to renew it."
@@ -589,92 +591,81 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_reused_profile_feeds_other_outputs() {
-        let home = Home::new();
-        home.write(
+    async fn test_reused_profile_exports_json_without_aws() {
+        let mut t = Harness::new();
+        t.write(
             "credentials",
             &saved_session("session", at(EXPIRATION_SECS)),
         );
-        let log = Log::default();
-        let (aws, mut terminal) = (FakeAws::new(&log), FakeTerminal::new(&log));
 
-        let json = home.config(&["-u", "session", "-e", "--format", "json"]);
-        run_at_start(&json, &aws, &mut terminal).await.unwrap();
-        assert_eq!(log_entries(&log), ["print"], "JSON needs no identity");
-        assert!(terminal.stdout.contains("\"AccessKeyId\": \"ASIASAVED\""));
+        t.run(&["-u", "session", "-e", "--format", "json"])
+            .await
+            .unwrap();
 
-        let bash = home.config(&["-u", "session", "-e"]);
-        let mut terminal = FakeTerminal::new(&log);
-        log.borrow_mut().clear();
-        run_at_start(&bash, &aws, &mut terminal).await.unwrap();
-        assert_eq!(
-            log_entries(&log),
-            ["GetCallerIdentity", "print"],
-            "the prompt needs it"
+        assert_eq!(t.log(), ["print"], "JSON needs no identity");
+        assert!(t.terminal.stdout.contains("\"AccessKeyId\": \"ASIASAVED\""));
+    }
+
+    #[tokio::test]
+    async fn test_reused_profile_looks_up_identity_for_prompt() {
+        let mut t = Harness::new();
+        t.write(
+            "credentials",
+            &saved_session("session", at(EXPIRATION_SECS)),
         );
+
+        t.run(&["-u", "session", "-e"]).await.unwrap();
+
+        assert_eq!(t.log(), ["GetCallerIdentity", "print"]);
         assert!(
-            terminal
+            t.terminal
                 .stdout
                 .contains("export AWS_ACCESS_KEY_ID='ASIASAVED'\n")
         );
+        assert!(t.terminal.stdout.contains("PS1='AWS:alice@123456789012"));
     }
 
     #[tokio::test]
     async fn test_reused_profile_survives_identity_failure() {
-        let home = Home::new();
-        home.write(
+        let mut t = Harness::new();
+        t.write(
             "credentials",
             &saved_session("session", at(EXPIRATION_SECS)),
         );
-        let log = Log::default();
-        let aws = FakeAws {
-            identity_error: true,
-            ..FakeAws::new(&log)
-        };
-        let mut terminal = FakeTerminal::new(&log);
-        let config = home.config(&["-u", "session", "-e"]);
+        t.aws.identity_error = true;
 
-        run_at_start(&config, &aws, &mut terminal).await.unwrap();
+        t.run(&["-u", "session", "-e"]).await.unwrap();
 
         assert!(
-            terminal
+            t.terminal
                 .stdout
                 .contains("export AWS_ACCESS_KEY_ID='ASIASAVED'\n")
         );
         assert!(
-            !terminal.stdout.contains("PS1"),
+            !t.terminal.stdout.contains("PS1"),
             "no identity, no prompt label"
         );
-        assert!(terminal.notes[1].starts_with("Leaving the prompt unchanged: "));
+        assert!(t.terminal.notes[1].starts_with("Leaving the prompt unchanged: "));
     }
 
     #[tokio::test]
     async fn test_profile_close_to_expiry_is_renewed() {
-        let home = Home::new();
-        home.write(
+        let mut t = Harness::new();
+        t.write(
             "credentials",
             &saved_session("session", at(EXPIRATION_SECS)),
         );
-        let log = Log::default();
-        let (aws, mut terminal) = (FakeAws::new(&log), FakeTerminal::new(&log));
-        let config = home.config(&["-u", "session", "-c", "123456"]);
 
-        run_with_left(
-            &config,
-            &aws,
-            &mut terminal,
+        t.run_with_left(
+            &["-u", "session", "-c", "123456"],
             MIN_REUSABLE - Duration::from_secs(1),
         )
         .await
         .unwrap();
 
+        assert!(t.called("GetSessionToken"));
         assert!(
-            log_entries(&log)
-                .iter()
-                .any(|e| e.starts_with("GetSessionToken"))
-        );
-        assert!(
-            home.read("credentials")
+            t.read("credentials")
                 .contains("aws_access_key_id = ASIATEST")
         );
     }
@@ -682,56 +673,43 @@ mod tests {
     #[tokio::test]
     async fn test_profile_without_expiration_is_renewed() {
         // Profiles written by earlier versions have no expiration recorded.
-        let home = Home::new();
-        home.write(
+        let mut t = Harness::new();
+        t.write(
             "credentials",
             "[session]\naws_access_key_id = OLD\naws_secret_access_key = OLD\naws_session_token = OLD\n",
         );
-        let log = Log::default();
-        let (aws, mut terminal) = (FakeAws::new(&log), FakeTerminal::new(&log));
-        let config = home.config(&["-u", "session", "-c", "123456"]);
 
-        run_at_start(&config, &aws, &mut terminal).await.unwrap();
+        t.run(&["-u", "session", "-c", "123456"]).await.unwrap();
 
-        assert!(
-            log_entries(&log)
-                .iter()
-                .any(|e| e.starts_with("GetSessionToken"))
-        );
-        assert!(!home.read("credentials").contains("OLD"));
+        assert!(t.called("GetSessionToken"));
+        assert!(!t.read("credentials").contains("OLD"));
     }
 
     #[tokio::test]
     async fn test_force_renews_valid_profile() {
-        let home = Home::new();
-        home.write(
+        let mut t = Harness::new();
+        t.write(
             "credentials",
             &saved_session("session", at(EXPIRATION_SECS)),
         );
-        let log = Log::default();
-        let (aws, mut terminal) = (FakeAws::new(&log), FakeTerminal::new(&log));
-        let config = home.config(&["-u", "session", "--force", "-c", "123456"]);
 
-        run_at_start(&config, &aws, &mut terminal).await.unwrap();
+        t.run(&["-u", "session", "--force", "-c", "123456"])
+            .await
+            .unwrap();
 
-        assert!(
-            log_entries(&log)
-                .iter()
-                .any(|e| e.starts_with("GetSessionToken"))
-        );
-        assert!(!home.read("credentials").contains("ASIASAVED"));
+        assert!(t.called("GetSessionToken"));
+        assert!(!t.read("credentials").contains("ASIASAVED"));
     }
 
     #[tokio::test]
     async fn test_shell_launch() {
-        let home = Home::new();
-        let log = Log::default();
-        let (aws, mut terminal) = (FakeAws::new(&log), FakeTerminal::new(&log));
-        let config = home.config(&["-s", "-c", "123456", "-p", "dev", "-f", "/tmp/creds"]);
+        let mut t = Harness::new();
 
-        run_at_start(&config, &aws, &mut terminal).await.unwrap();
+        t.run(&["-s", "-c", "123456", "-p", "dev", "-f", "/tmp/creds"])
+            .await
+            .unwrap();
 
-        let [launch] = terminal.shells.as_slice() else {
+        let [launch] = t.terminal.shells.as_slice() else {
             panic!("expected one shell launch");
         };
         assert_eq!(launch.program, "/bin/bash");
@@ -755,14 +733,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_export_happens_before_shell() {
-        let home = Home::new();
-        let log = Log::default();
-        let (aws, mut terminal) = (FakeAws::new(&log), FakeTerminal::new(&log));
-        let config = home.config(&["-s", "-e", "-c", "123456"]);
+        let mut t = Harness::new();
 
-        run_at_start(&config, &aws, &mut terminal).await.unwrap();
+        t.run(&["-s", "-e", "-c", "123456"]).await.unwrap();
 
-        let entries = log_entries(&log);
-        assert_eq!(entries[entries.len() - 2..], ["print", "shell /bin/bash"]);
+        let log = t.log();
+        assert_eq!(log[log.len() - 2..], ["print", "shell /bin/bash"]);
     }
 }
