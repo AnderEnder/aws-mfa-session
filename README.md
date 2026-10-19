@@ -9,6 +9,7 @@ A command line utility to generate temporary AWS credentials using virtual MFA d
 ## Features
 * Supports MFA authentication with virtual MFA devices (hardware MFA devices supported, but FIDO security keys are not supported)
 * **Interactive MFA code prompting** - if no code is provided, you'll be prompted to enter it
+* **MFA code from a command** - `mfa_process` in the profile (compatible with aws-vault) or `--mfa-process` runs e.g. `ykman` to get the code
 * Select any profile from AWS credentials file
 * **Automatic MFA device selection** - reads `mfa_serial` from AWS profile configuration (~/.aws/config or ~/.aws/credentials), with fallback to automatic device detection
 * Generate temporary credentials using AWS STS
@@ -73,11 +74,35 @@ mfa_serial = GAHT12345678
 
 **Section names** follow the AWS SDKs: profiles are `[profile name]` (or `[default]`) in `~/.aws/config` and `[name]` in `~/.aws/credentials`. Sections spelled otherwise are ignored, as the AWS SDKs ignore them.
 
+### MFA Code from a Command
+
+Instead of typing the code, set `mfa_process` in the profile to a command that prints it. This is the same setting [aws-vault](https://github.com/ByteNess/aws-vault) uses, so an existing aws-vault config works as is.
+
+```ini
+[profile dev]
+mfa_serial = arn:aws:iam::123456789012:mfa/username
+# YubiKey OATH (`ykman oath accounts list` shows the account names)
+mfa_process = ykman oath accounts code --single aws
+
+[profile prod]
+# 1Password
+mfa_process = op item get aws-prod --otp
+# pass-otp: mfa_process = pass otp aws/prod
+```
+
+`--mfa-process COMMAND` does the same for one run and takes precedence over the profile. The code comes from `--code` first, then `--mfa-process`, then the profile's `mfa_process`, and only then is prompted for.
+
+- The command runs through `sh -c` (`cmd /C` on Windows), so pipes and quoting work as in your shell.
+- It runs at the point where the prompt would appear, after the credentials check, so a time-based code is fresh.
+- It must print only the 6-digit code. Its prompts and errors (e.g. "Touch your YubiKey") reach your terminal.
+
+**Security:** if the TOTP secret lives on the same machine as your access keys (a password manager or `pass` on your laptop), whoever gets the machine gets both factors. A hardware key keeps the secret off the machine; with an OATH account added by `ykman oath accounts add --touch`, every code still needs a physical touch.
+
 ## Examples
 
 ### Interactive MFA Code Entry
 
-If you don't provide the `--code` argument, you'll be prompted to enter it interactively. The prompt appears only after your long-term credentials have been checked, so a misconfiguration is reported before you reach for your MFA device:
+If you don't provide the `--code` argument and no [`mfa_process`](#mfa-code-from-a-command) is set, you'll be prompted to enter it interactively. The prompt appears only after your long-term credentials have been checked, so a misconfiguration is reported before you reach for your MFA device:
 
 ```sh
 # Interactive mode - you'll be prompted for the MFA code
