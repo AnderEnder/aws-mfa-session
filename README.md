@@ -14,6 +14,7 @@ A command line utility to generate temporary AWS credentials using virtual MFA d
 * Generate temporary credentials using AWS STS
 * **Enhanced error reporting** with detailed error messages
 * **Atomic credentials file updates** - the file is replaced via an atomic rename, preventing partial/torn writes
+* **Comment-preserving edits** - only the session profile's keys change; comments, formatting and other settings stay as they were (see [`aws-shared-config`](https://github.com/AnderEnder/aws-shared-config))
 * **Session reuse** - a session profile that is still valid is reused instead of asking for a new MFA code
 * Multiple output options:
   * Export as environment variables for bash, zsh, sh, fish, cmd or PowerShell
@@ -66,6 +67,8 @@ mfa_serial = GAHT12345678
 - Hardware MFA devices: `GAHT12345678` (serial number)
 
 **Precedence:** Config file (~/.aws/config) takes precedence over credentials file (~/.aws/credentials).
+
+**Section names** follow the AWS SDKs: profiles are `[profile name]` (or `[default]`) in `~/.aws/config` and `[name]` in `~/.aws/credentials`. Sections spelled otherwise are ignored, as the AWS SDKs ignore them.
 
 ## Examples
 
