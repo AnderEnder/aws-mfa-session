@@ -1,5 +1,5 @@
 # aws-mfa-session
-[![build status](https://github.com/AnderEnder/aws-mfa-session/workflows/Rust/badge.svg)](https://github.com/AnderEnder/aws-mfa-session/actions/workflows/rust.yml?query=branch%3Amaster)
+[![build status](https://github.com/AnderEnder/aws-mfa-session/actions/workflows/build.yml/badge.svg?branch=master)](https://github.com/AnderEnder/aws-mfa-session/actions/workflows/build.yml?query=branch%3Amaster)
 [![build status](https://github.com/AnderEnder/aws-mfa-session/workflows/Release/badge.svg)](https://github.com/AnderEnder/aws-mfa-session/actions/workflows/release.yml)
 [![codecov](https://codecov.io/gh/AnderEnder/aws-mfa-session/branch/master/graph/badge.svg)](https://codecov.io/gh/AnderEnder/aws-mfa-session)
 [![crates.io](https://img.shields.io/crates/v/aws-mfa-session.svg)](https://crates.io/crates/aws-mfa-session)
@@ -25,9 +25,12 @@ A command line utility to generate temporary AWS credentials using virtual MFA d
 
 GitHub Release page provides binaries for:
 
-* Windows
-* Linux
-* macOS
+* Linux (x86_64 and ARM), in two flavors:
+  * `aws-mfa-session-<arch>-linux.tar.gz`: a static musl binary that runs on any Linux, including Alpine and scratch containers
+  * `aws-mfa-session-<arch>-linux-gnu.tar.gz`: a glibc binary for distributions with glibc 2.17 or newer (RHEL/CentOS 7, Ubuntu 14.04, Debian 8 and later)
+* macOS (Apple Silicon and Intel)
+* Windows (x86_64 and ARM)
+* FreeBSD 14 or newer (x86_64)
 
 ## Configuration
 
@@ -344,9 +347,12 @@ function global:prompt { 'AWS:user@123456789012> ' }
 
 Download pre-built binaries from the [GitHub Releases](https://github.com/AnderEnder/aws-mfa-session/releases) page for:
 
-* Windows
-* Linux
-* macOS
+* Linux (x86_64 and ARM), in two flavors:
+  * `aws-mfa-session-<arch>-linux.tar.gz`: a static musl binary that runs on any Linux, including Alpine and scratch containers
+  * `aws-mfa-session-<arch>-linux-gnu.tar.gz`: a glibc binary for distributions with glibc 2.17 or newer (RHEL/CentOS 7, Ubuntu 14.04, Debian 8 and later)
+* macOS (Apple Silicon and Intel)
+* Windows (x86_64 and ARM)
+* FreeBSD 14 or newer (x86_64)
 
 ### Build from Source
 
@@ -366,6 +372,28 @@ cargo build --release
 
 # Install from local source
 cargo install --path .
+```
+
+### Cross-compiling
+
+The release workflow builds the Linux and FreeBSD binaries on a single Linux runner with [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild), which needs [zig](https://ziglang.org/):
+
+```sh
+# Static musl binary
+cargo zigbuild --release --target x86_64-unknown-linux-musl
+
+# glibc binary that runs on glibc 2.17 or newer
+cargo zigbuild --release --target x86_64-unknown-linux-gnu.2.17
+
+# FreeBSD 14 or newer
+cargo zigbuild --release --target x86_64-unknown-freebsd
+```
+
+Both macOS binaries are built on Apple Silicon; Xcode's toolchain targets Intel Macs directly:
+
+```sh
+rustup target add x86_64-apple-darwin
+cargo build --release --target x86_64-apple-darwin
 ```
 
 ## Usage
