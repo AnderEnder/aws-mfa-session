@@ -1,7 +1,7 @@
 //! Resolves command-line arguments and environment variables into the settings
 //! for a run, so that nothing else reads (or writes) process-wide state.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::args::Args;
 use crate::error::CliError;
@@ -49,11 +49,14 @@ impl Env {
         }
     }
 
-    /// `~/.aws/<name>`, the default location of the shared AWS files.
-    fn default_aws_file(&self, name: &str) -> Option<PathBuf> {
-        self.home_dir
-            .as_ref()
-            .map(|home| home.join(".aws").join(name))
+    /// A shared AWS file: the path set in its environment variable, else
+    /// `~/.aws/<name>`.
+    fn aws_file(&self, var: Option<&str>, name: &str) -> Option<PathBuf> {
+        match (var, &self.home_dir) {
+            (Some(path), _) => Some(self.expand_home(path)),
+            (None, Some(home)) => Some(home.join(".aws").join(name)),
+            (None, None) => None,
+        }
     }
 }
 
@@ -121,17 +124,10 @@ pub struct Config {
 impl Config {
     pub fn new(args: Args, env: &Env) -> Result<Self, CliError> {
         let cli_credentials_file = args.credentials_file.map(|path| env.expand_home(&path));
-        let credentials_file =
-            cli_credentials_file
-                .clone()
-                .or_else(|| match &env.aws_shared_credentials_file {
-                    Some(path) => Some(env.expand_home(path)),
-                    None => env.default_aws_file("credentials"),
-                });
-        let config_file = match &env.aws_config_file {
-            Some(path) => Some(env.expand_home(path)),
-            None => env.default_aws_file("config"),
-        };
+        let credentials_file = cli_credentials_file
+            .clone()
+            .or_else(|| env.aws_file(env.aws_shared_credentials_file.as_deref(), "credentials"));
+        let config_file = env.aws_file(env.aws_config_file.as_deref(), "config");
 
         let shell = env
             .shell
@@ -178,20 +174,13 @@ impl Config {
             outputs,
         })
     }
-
-    pub fn config_file(&self) -> Option<&Path> {
-        self.config_file.as_deref()
-    }
-
-    pub fn credentials_file(&self) -> Option<&Path> {
-        self.credentials_file.as_deref()
-    }
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
     use clap::Parser;
+    use std::path::Path;
 
     pub fn args(args: &[&str]) -> Args {
         Args::try_parse_from(std::iter::once("aws-mfa-session").chain(args.iter().copied()))
@@ -231,11 +220,11 @@ pub(crate) mod tests {
     fn test_default_file_locations() {
         let config = config(&["-e"], &home_env());
         assert_eq!(
-            config.credentials_file(),
+            config.credentials_file.as_deref(),
             Some(Path::new("/home/alice/.aws/credentials"))
         );
         assert_eq!(
-            config.config_file(),
+            config.config_file.as_deref(),
             Some(Path::new("/home/alice/.aws/config"))
         );
         assert_eq!(config.sdk.credentials_file, None);
@@ -250,11 +239,11 @@ pub(crate) mod tests {
         };
         let config = config(&["-e"], &env);
         assert_eq!(
-            config.config_file(),
+            config.config_file.as_deref(),
             Some(Path::new("/home/alice/custom/config"))
         );
         assert_eq!(
-            config.credentials_file(),
+            config.credentials_file.as_deref(),
             Some(Path::new("/etc/aws/credentials"))
         );
         assert_eq!(
@@ -271,7 +260,7 @@ pub(crate) mod tests {
         };
         let config = config(&["-u", "session", "-f", "~/.aws/credentials2"], &env);
         let expected = Path::new("/home/alice/.aws/credentials2");
-        assert_eq!(config.credentials_file(), Some(expected));
+        assert_eq!(config.credentials_file.as_deref(), Some(expected));
         assert_eq!(config.sdk.credentials_file.as_deref(), Some(expected));
         assert_eq!(
             config.outputs.session_profile,
@@ -300,8 +289,8 @@ pub(crate) mod tests {
 
         // Other outputs work without a home directory.
         let config = Config::new(args(&["-e"]), &Env::default()).unwrap();
-        assert_eq!(config.credentials_file(), None);
-        assert_eq!(config.config_file(), None);
+        assert_eq!(config.credentials_file, None);
+        assert_eq!(config.config_file, None);
     }
 
     #[test]

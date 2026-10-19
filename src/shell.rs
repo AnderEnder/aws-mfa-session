@@ -131,6 +131,8 @@ fn powershell_quote(value: &str) -> String {
 }
 
 /// An interactive shell to start with session credentials in its environment.
+// No `Debug`: `env` holds the secrets.
+#[derive(Clone)]
 pub struct ShellLaunch {
     pub program: String,
     pub env: Vec<(&'static str, String)>,

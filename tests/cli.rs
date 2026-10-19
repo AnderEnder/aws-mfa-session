@@ -198,3 +198,32 @@ fn fails_before_prompting_when_aws_is_unreachable() {
     );
     assert!(!sandbox.credentials_file().exists());
 }
+
+#[test]
+fn rejects_an_unparsable_credentials_file_before_aws() {
+    let sandbox = Sandbox::new();
+    let credentials = sandbox.credentials_file();
+    let invalid = "aws_access_key_id = outside any profile\n";
+    fs::write(&credentials, invalid).unwrap();
+
+    // Base credentials and an unreachable endpoint: reaching AWS would fail
+    // with a GetCallerIdentity error instead.
+    let output = sandbox
+        .command()
+        .args(["-f", path_arg(&credentials), "-u", "session", "--force"])
+        .env("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
+        .env("AWS_SECRET_ACCESS_KEY", "secret")
+        .env("AWS_ENDPOINT_URL", "http://127.0.0.1:1")
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let message = stderr(&output);
+    assert!(
+        message.contains("cannot update the credentials file"),
+        "{message}"
+    );
+    assert!(message.contains("line 1"), "{message}");
+    assert!(!message.contains("GetCallerIdentity"), "{message}");
+    assert_eq!(fs::read_to_string(&credentials).unwrap(), invalid);
+}
