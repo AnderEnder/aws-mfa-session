@@ -7,13 +7,16 @@ use std::time::SystemTime;
 
 use aws_config::{BehaviorVersion, Region, SdkConfig};
 use aws_runtime::env_config::file::{EnvConfigFileKind, EnvConfigFiles};
+use aws_sdk_sts::config::Credentials;
 use aws_sdk_sts::error::{DisplayErrorContext, ProvideErrorMetadata, SdkError};
+use aws_sdk_sts::types::PolicyDescriptorType;
 use tokio::sync::OnceCell;
 
 use crate::config::SdkSettings;
 use crate::error::CliError;
 use crate::mfa::MfaCode;
-use crate::session::{Identity, SessionCredentials};
+use crate::role::RoleRequest;
+use crate::session::{Identity, Session, SessionCredentials};
 
 /// Used when no region is configured anywhere; STS and IAM are global services,
 /// so any region works for the calls this tool makes.
@@ -35,6 +38,14 @@ pub(crate) trait AwsApi {
         duration_secs: i32,
     ) -> Result<SessionCredentials, CliError>;
 
+    /// Assume `role` with the MFA `session` credentials, which carry the MFA
+    /// authentication that role trust policies check.
+    async fn assume_role(
+        &self,
+        session: &SessionCredentials,
+        role: &RoleRequest,
+    ) -> Result<Session, CliError>;
+
     /// The region the calls are made in, recorded in saved profiles.
     async fn region(&self) -> Option<String>;
 }
@@ -46,6 +57,7 @@ pub(crate) struct SdkAws {
 }
 
 struct Clients {
+    config: SdkConfig,
     iam: aws_sdk_iam::Client,
     sts: aws_sdk_sts::Client,
     region: Option<String>,
@@ -69,6 +81,7 @@ impl SdkAws {
                     iam: aws_sdk_iam::Client::new(&config),
                     sts: aws_sdk_sts::Client::new(&config),
                     region: config.region().map(ToString::to_string),
+                    config,
                 }
             })
             .await
@@ -162,6 +175,52 @@ impl AwsApi for SdkAws {
             field: "Credentials",
         })?;
         Ok(SessionCredentials::from(credentials))
+    }
+
+    async fn assume_role(
+        &self,
+        session: &SessionCredentials,
+        role: &RoleRequest,
+    ) -> Result<Session, CliError> {
+        const OPERATION: &str = "AssumeRole";
+        let credentials = Credentials::new(
+            &session.access_key_id,
+            &session.secret_access_key,
+            Some(session.session_token.clone()),
+            session.expiration,
+            "aws-mfa-session",
+        );
+        let config = aws_sdk_sts::config::Builder::from(&self.clients().await.config)
+            .credentials_provider(credentials)
+            .build();
+        let policy_arns: Vec<_> = role
+            .policy_arns
+            .iter()
+            .map(|arn| PolicyDescriptorType::builder().arn(arn).build())
+            .collect();
+        let output = aws_sdk_sts::Client::from_conf(config)
+            .assume_role()
+            .role_arn(&role.arn)
+            .role_session_name(&role.session_name)
+            .set_external_id(role.external_id.clone())
+            .set_duration_seconds(role.duration_secs)
+            .set_policy_arns((!policy_arns.is_empty()).then_some(policy_arns))
+            .set_policy(role.policy.clone())
+            .send()
+            .await
+            .map_err(|e| aws_error(OPERATION, e))?;
+        let missing = |field| CliError::IncompleteResponse {
+            operation: OPERATION,
+            field,
+        };
+        let credentials = output.credentials().ok_or_else(|| missing("Credentials"))?;
+        let user = output
+            .assumed_role_user()
+            .ok_or_else(|| missing("AssumedRoleUser"))?;
+        Ok(Session {
+            credentials: SessionCredentials::from(credentials),
+            identity: Some(Identity::from_arn(user.arn())),
+        })
     }
 
     async fn region(&self) -> Option<String> {

@@ -13,6 +13,7 @@ mod error;
 mod export;
 mod mfa;
 mod profile;
+mod role;
 mod session;
 mod shell;
 mod terminal;

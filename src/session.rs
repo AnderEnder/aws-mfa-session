@@ -62,7 +62,14 @@ impl fmt::Debug for SessionCredentials {
     }
 }
 
-/// The IAM principal whose long-term credentials request the session.
+/// Credentials ready for the outputs, and who they belong to when known.
+pub struct Session {
+    pub credentials: SessionCredentials,
+    pub identity: Option<Identity>,
+}
+
+/// The IAM principal the credentials belong to: the user whose long-term
+/// credentials request the session, or the role assumed with it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Identity {
     pub account: String,
@@ -70,15 +77,28 @@ pub struct Identity {
 }
 
 impl Identity {
-    /// The user name at the end of the ARN: `alice` for
-    /// `arn:aws:iam::123456789012:user/team/alice`, `root` for the root user.
-    pub fn user_name(&self) -> &str {
+    /// The identity of `arn`, whose fifth field is the account.
+    pub fn from_arn(arn: &str) -> Self {
+        Self {
+            account: arn.split(':').nth(4).unwrap_or_default().to_owned(),
+            arn: arn.to_owned(),
+        }
+    }
+
+    /// The name for prompts: `alice` for
+    /// `arn:aws:iam::123456789012:user/team/alice`, `root` for the root user,
+    /// and the role, `Admin`, for
+    /// `arn:aws:sts::123456789012:assumed-role/Admin/session-name`.
+    pub fn name(&self) -> &str {
+        if let Some((_, role)) = self.arn.split_once(":assumed-role/") {
+            return role.split('/').next().unwrap_or(role);
+        }
         self.arn.rsplit(['/', ':']).next().unwrap_or(&self.arn)
     }
 
     /// Marker for shell prompts, e.g. `AWS:alice@123456789012`.
     pub fn prompt_label(&self) -> String {
-        format!("AWS:{}@{}", self.user_name(), self.account)
+        format!("AWS:{}@{}", self.name(), self.account)
     }
 }
 
@@ -204,27 +224,23 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_identity_user_name() {
-        let identity = |arn: &str| Identity {
-            account: "123456789012".to_owned(),
-            arn: arn.to_owned(),
-        };
+    fn test_identity_name() {
+        let name = |arn: &str| Identity::from_arn(arn).name().to_owned();
+        assert_eq!(name("arn:aws:iam::123456789012:user/alice"), "alice");
+        assert_eq!(name("arn:aws:iam::123456789012:user/team/ops/bob"), "bob");
+        assert_eq!(name("arn:aws:iam::123456789012:root"), "root");
         assert_eq!(
-            identity("arn:aws:iam::123456789012:user/alice").user_name(),
-            "alice"
+            name("arn:aws:sts::222222222222:assumed-role/AdminRole/aws-mfa-session"),
+            "AdminRole"
         );
-        assert_eq!(
-            identity("arn:aws:iam::123456789012:user/team/ops/bob").user_name(),
-            "bob"
-        );
-        assert_eq!(
-            identity("arn:aws:iam::123456789012:root").user_name(),
-            "root"
-        );
-        assert_eq!(
-            identity("arn:aws:iam::123456789012:user/alice").prompt_label(),
-            "AWS:alice@123456789012"
-        );
+    }
+
+    #[test]
+    fn test_identity_from_arn() {
+        let identity = Identity::from_arn("arn:aws:sts::222222222222:assumed-role/Admin/s");
+        assert_eq!(identity.account, "222222222222");
+        assert_eq!(identity.prompt_label(), "AWS:Admin@222222222222");
+        assert_eq!(Identity::from_arn("not-an-arn").account, "");
     }
 
     #[test]

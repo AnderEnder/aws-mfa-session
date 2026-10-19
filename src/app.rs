@@ -1,5 +1,5 @@
-//! The flow of a run: get session credentials — reused or new — and deliver
-//! them to each requested output.
+//! The flow of a run: get session credentials — reused or new — optionally
+//! assume a role with them, and deliver the result to each requested output.
 
 use std::io;
 use std::time::{Duration, SystemTime};
@@ -10,7 +10,8 @@ use crate::credentials::{self, SessionProfile};
 use crate::error::CliError;
 use crate::mfa::{self, MfaCode};
 use crate::profile;
-use crate::session::{Identity, SessionCredentials};
+use crate::role::RoleRequest;
+use crate::session::{Session, SessionCredentials};
 use crate::shell::{Shell, ShellLaunch};
 use crate::terminal::Terminal;
 
@@ -18,23 +19,32 @@ use crate::terminal::Terminal;
 /// reused session never ends sooner than the shortest one STS issues.
 const MIN_REUSABLE: Duration = Duration::from_secs(15 * 60);
 
-/// Credentials ready for the outputs, and who they belong to when known.
-struct Session {
-    credentials: SessionCredentials,
-    identity: Option<Identity>,
-}
-
 pub(crate) async fn run(
     config: &Config,
     aws: &impl AwsApi,
     terminal: &mut impl Terminal,
     now: SystemTime,
 ) -> Result<(), CliError> {
+    // Resolved first, so a misconfigured role fails before an MFA code is spent.
+    let role = role_request(config)?;
     let session = match reusable_session(config, now)? {
         Some((target, credentials)) => reuse(config, aws, terminal, target, credentials, now).await,
         None => renew(config, aws, terminal, now).await?,
     };
+    let session = match &role {
+        Some(role) => assume(aws, terminal, &session, role, now).await?,
+        None => session,
+    };
     deliver(config, terminal, &session)
+}
+
+/// The role to assume for `--role`.
+fn role_request(config: &Config) -> Result<Option<RoleRequest>, CliError> {
+    config
+        .role
+        .as_deref()
+        .map(|role| RoleRequest::resolve(role, |key| profile_setting(config, role, key)))
+        .transpose()
 }
 
 /// The `--update-profile` profile and its session, if the session is still
@@ -75,7 +85,8 @@ async fn reuse(
         target.name,
         credentials.describe_validity(now)
     ));
-    let identity = if config.outputs.shows_prompt() {
+    // With --role, the prompt shows the role instead.
+    let identity = if config.outputs.shows_prompt() && config.role.is_none() {
         aws.caller_identity()
             .await
             .inspect_err(|error| terminal.note(&format!("Leaving the prompt unchanged: {error}")))
@@ -131,13 +142,31 @@ async fn renew(
     })
 }
 
+/// Assume `role` with the MFA session. No code is needed: the session carries
+/// the MFA authentication that the role's trust policy checks.
+async fn assume(
+    aws: &impl AwsApi,
+    terminal: &mut impl Terminal,
+    session: &Session,
+    role: &RoleRequest,
+    now: SystemTime,
+) -> Result<Session, CliError> {
+    let assumed = aws.assume_role(&session.credentials, role).await?;
+    terminal.note(&format!(
+        "Assumed role {}, valid until {}.",
+        role.arn,
+        assumed.credentials.describe_validity(now)
+    ));
+    Ok(assumed)
+}
+
 /// The MFA device from `--arn`, else the profile's `mfa_serial`, else the
 /// first usable device assigned to the user.
 async fn mfa_device(config: &Config, aws: &impl AwsApi) -> Result<String, CliError> {
     if let Some(device) = &config.mfa_device {
         return Ok(device.clone());
     }
-    if let Some(device) = profile_setting(config, "mfa_serial") {
+    if let Some(device) = profile_setting(config, &config.profile, "mfa_serial") {
         return Ok(device);
     }
     mfa::select_device(aws.mfa_devices().await?).ok_or(CliError::NoMfaDevice)
@@ -152,7 +181,7 @@ fn mfa_code(config: &Config, terminal: &mut impl Terminal) -> Result<MfaCode, Cl
     let command = config
         .mfa_process
         .clone()
-        .or_else(|| profile_setting(config, "mfa_process"))
+        .or_else(|| profile_setting(config, &config.profile, "mfa_process"))
         .filter(|command| !command.trim().is_empty());
     match command {
         Some(command) => terminal
@@ -163,13 +192,12 @@ fn mfa_code(config: &Config, terminal: &mut impl Terminal) -> Result<MfaCode, Cl
     }
 }
 
-/// A setting of the profile with the long-term credentials, from the shared
-/// AWS files.
-fn profile_setting(config: &Config, key: &str) -> Option<String> {
+/// A setting of `profile` in the shared AWS files.
+fn profile_setting(config: &Config, profile: &str, key: &str) -> Option<String> {
     profile::setting(
         config.config_file.as_deref(),
         config.credentials_file.as_deref(),
-        &config.profile,
+        profile,
         key,
     )
 }
@@ -222,6 +250,7 @@ mod tests {
     use super::*;
     use crate::config::Env;
     use crate::config::tests::args;
+    use crate::session::Identity;
     use crate::session::tests::{EXPIRATION_SECS, at, sample_credentials};
     use std::cell::RefCell;
     use std::fs;
@@ -231,6 +260,10 @@ mod tests {
     const ALICE_ARN: &str = "arn:aws:iam::123456789012:user/alice";
     const DEVICE: &str = "arn:aws:iam::123456789012:mfa/alice";
     const PROMPTED_CODE: &str = "654321";
+    const ROLE_ARN: &str = "arn:aws:iam::222222222222:role/AdminRole";
+    const ROLE_PROFILE: &str = "[profile dev-account]\n\
+                                source_profile = mycompany-session\n\
+                                role_arn = arn:aws:iam::222222222222:role/AdminRole\n";
 
     /// The fakes record each step here, so tests can assert ordering across
     /// AWS calls and terminal interaction.
@@ -286,6 +319,28 @@ mod tests {
                 "GetSessionToken {mfa_device} {code} {duration_secs}"
             ));
             Ok(sample_credentials())
+        }
+
+        async fn assume_role(
+            &self,
+            session: &SessionCredentials,
+            role: &RoleRequest,
+        ) -> Result<Session, CliError> {
+            self.record(format!(
+                "AssumeRole {} as {} with {}",
+                role.arn, role.session_name, session.access_key_id
+            ));
+            let role_name = role.arn.rsplit('/').next().unwrap();
+            Ok(Session {
+                credentials: SessionCredentials {
+                    access_key_id: "ASIAROLE".to_owned(),
+                    ..sample_credentials()
+                },
+                identity: Some(Identity::from_arn(&format!(
+                    "arn:aws:sts::222222222222:assumed-role/{role_name}/{}",
+                    role.session_name
+                ))),
+            })
         }
 
         async fn region(&self) -> Option<String> {
@@ -802,6 +857,107 @@ mod tests {
 
         assert!(t.called("GetSessionToken"));
         assert!(!t.read("credentials").contains("ASIASAVED"));
+    }
+
+    #[tokio::test]
+    async fn test_role_with_new_session() {
+        let mut t = Harness::new();
+        t.write("config", ROLE_PROFILE);
+
+        t.run(&["-e", "-c", "123456", "--role", "dev-account"])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            t.log(),
+            [
+                "GetCallerIdentity",
+                "ListMFADevices",
+                &format!("GetSessionToken {DEVICE} 123456 3600"),
+                &format!("AssumeRole {ROLE_ARN} as aws-mfa-session with ASIATEST"),
+                "print",
+            ]
+        );
+        assert!(
+            t.terminal
+                .stdout
+                .contains("export AWS_ACCESS_KEY_ID='ASIAROLE'\n")
+        );
+        assert!(
+            t.terminal
+                .stdout
+                .ends_with("export PS1='AWS:AdminRole@222222222222 \\$ '\n"),
+            "the prompt shows the role: {}",
+            t.terminal.stdout
+        );
+        assert_eq!(
+            t.terminal.notes[1],
+            format!("Assumed role {ROLE_ARN}, valid until 2027-01-15T08:00:00Z (1h 00m left).")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_role_with_reused_session_needs_no_code() {
+        let mut t = Harness::new();
+        t.write(
+            "credentials",
+            &saved_session("session", at(EXPIRATION_SECS)),
+        );
+
+        t.run(&["-u", "session", "-e", "--role", ROLE_ARN])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            t.log(),
+            [
+                &format!("AssumeRole {ROLE_ARN} as aws-mfa-session with ASIASAVED"),
+                "print",
+            ],
+            "no identity lookup, no prompt, no GetSessionToken"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_role_keeps_the_mfa_session_in_update_profile() {
+        let mut t = Harness::new();
+
+        t.run(&["-u", "session", "-s", "-c", "123456", "--role", ROLE_ARN])
+            .await
+            .unwrap();
+
+        let saved = t.read("credentials");
+        assert!(saved.contains("aws_access_key_id = ASIATEST"), "{saved}");
+        let [launch] = t.terminal.shells.as_slice() else {
+            panic!("expected one shell launch");
+        };
+        assert_eq!(launch.env[0], ("AWS_ACCESS_KEY_ID", "ASIAROLE".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn test_role_profile_settings_are_used() {
+        let mut t = Harness::new();
+        t.write(
+            "config",
+            &format!("{ROLE_PROFILE}role_session_name = alice\n"),
+        );
+
+        t.run(&["-e", "-c", "123456", "--role", "dev-account"])
+            .await
+            .unwrap();
+
+        assert!(t.called(&format!("AssumeRole {ROLE_ARN} as alice with")));
+    }
+
+    #[tokio::test]
+    async fn test_role_without_role_arn_fails_before_aws() {
+        let mut t = Harness::new();
+        t.write("config", "[profile dev-account]\nregion = eu-west-1\n");
+
+        let error = t.run(&["-e", "--role", "dev-account"]).await.unwrap_err();
+
+        assert!(matches!(error, CliError::NoRoleArn { .. }), "{error:?}");
+        assert!(t.log().is_empty(), "{:?}", t.log());
     }
 
     #[tokio::test]

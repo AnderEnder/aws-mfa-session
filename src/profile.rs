@@ -124,6 +124,17 @@ mfa_serial = ignored-without-profile-prefix
     }
 
     #[test]
+    fn test_inline_json_policy_is_read_intact() {
+        // As the README shows it for role_session_policy.
+        let policy = r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:Get*","s3:List*"],"Resource":"*"}]}"#;
+        let config = format!("[profile dev]\nrole_session_policy = {policy}\n");
+        assert_eq!(
+            setting_in(&config, FileKind::Config, "dev", "role_session_policy").as_deref(),
+            Some(policy)
+        );
+    }
+
+    #[test]
     fn test_falls_back_to_credentials_file() {
         let dir = tempfile::tempdir().unwrap();
         let config = dir.path().join("config");
