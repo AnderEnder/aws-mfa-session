@@ -19,7 +19,7 @@ jobs:
       with:
         shared-key: coverage
     - name: Install cargo-tarpaulin
-      uses: taiki-e/install-action@v2.87.29
+      uses: taiki-e/install-action@v2.87.32
       with:
         tool: cargo-tarpaulin
     - name: Run coverage
